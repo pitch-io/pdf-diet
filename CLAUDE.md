@@ -41,10 +41,15 @@ Two things to keep in mind when reading its output:
 - **The quality scales are not the same number line.** Ours sets a
   distortion budget; the reference tool's 0.6 means whatever its SDK means.
   Compare size/fidelity *pairs*, not settings.
-- **A large positive size delta paired with a PSNR near 99 dB means we
-  declined to compress**, not that we compressed badly. `encode_candidates`
-  returns nothing under the floor, so the image is left alone. Check with
-  `-v` on that deck before concluding anything.
+- **PSNR is an estimate from sampled pages; size is exact.** A 38-page deck
+  measured 99.00 dB over 3 sampled pages and 73.55 dB over 30, because the
+  small sample missed every page whose images had been touched. Check
+  `Result.images` or raise `--sample-pages` before concluding anything about
+  an individual deck.
+- **A PSNR near 99 dB over a full sample means we declined to compress.**
+  That is a real state — `encode_candidates` can return only a lossless
+  option, which the caller rejects as no improvement — but confirm the
+  sample is large enough first.
 
 `--render` shells out to `pdftoppm` (poppler, GPL). It is a measurement
 tool run as a separate process, never a dependency of the package, and

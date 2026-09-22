@@ -16,6 +16,12 @@ Note that the two tools' quality scales are not necessarily the same number
 line: ours sets a distortion budget, theirs is whatever their SDK means by
 it. Compare the size/fidelity pairs, not the settings.
 
+Size figures are exact. **PSNR figures are estimates** from a sample of
+pages, and are sensitive to how many: a 38-page deck measured 99.00 dB
+(bit-identical) over 3 sampled pages and 73.55 dB over 30, because the first
+sample happened to miss every page whose images had been touched. Raise
+``--sample-pages`` before drawing conclusions about any individual deck.
+
 ``--render`` shells out to ``pdftoppm`` (poppler). That is a GPL tool used
 here as a separate process for measurement only; it is not a dependency of
 the package and nothing it touches is distributed.
@@ -335,8 +341,8 @@ def main(argv=None) -> int:
                     help="parallel decks (each is memory hungry)")
     ap.add_argument("--render", action="store_true",
                     help="also measure visual fidelity (needs pdftoppm)")
-    ap.add_argument("--sample-pages", type=int, default=3,
-                    help="pages per deck to render (default: 3)")
+    ap.add_argument("--sample-pages", type=int, default=8,
+                    help="pages per deck to render (default: 8)")
     ap.add_argument("--dpi", type=int, default=50, help="render DPI (default: 50)")
     ap.add_argument("--csv", default=None, help="also write results as CSV")
     args = ap.parse_args(argv)
