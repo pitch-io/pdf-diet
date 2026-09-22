@@ -85,8 +85,10 @@ These are load-bearing. Tests enforce all of them.
 1. **A stream's component count must match its declared `/ColorSpace`.**
    3 for `/DeviceRGB`, 1 for `/DeviceGray`. `_shape_ok` re-decodes every
    candidate to check.
-2. **Every lossy candidate must clear `psnr_floor()` for that image.**
-   Never select on size alone.
+2. **Every lossy candidate clears `psnr_floor()`, or is the best that codec
+   can manage.** Never select on size alone. The second case exists because
+   the floor is capped (see `PSNR_FLOOR_CEILING`) and some images cannot
+   reach it at any setting; returning nothing there left them untouched.
 3. **Cropping an image requires rewriting its placement matrix.** Crop and
    `adjust_matrix` must be applied together or the page shifts.
 4. **Downsampling is decided per axis.** A stretched image has different
@@ -130,6 +132,25 @@ A low-frequency (post-blur) error metric was also tried as a banding
 detector and rejected: it separates good from bad *within* one image but not
 *across* images — a mottled gradient scored 1.58 and an acceptable
 photograph 1.75.
+
+**The floor is capped at `PSNR_FLOOR_CEILING` (48 dB).** Uncapped, quality
+0.8 demanded ~53.6 dB on smooth content; nothing satisfied that cheaply, so
+decks made mostly of flat graphics came out *larger* than the reference
+optimizer's output or were skipped entirely. Swept over the corpus at
+48/50/52/54/uncapped, 48 is where the size regression disappears — a
+gradient-heavy deck went from +49% to −31% against the reference with no
+banding on visual inspection, and photo-heavy decks are entirely insensitive
+to the cap because their floors sit far below it.
+
+### Pillow's JPEG optimiser silently caps quality
+
+`im.save(..., format="JPEG", optimize=True)` buffers the whole scan and
+raises `OSError("broken data stream when writing image file")` when it does
+not fit — which happens on noisy images above roughly quality 90. The
+exception surfaced inside `_search_codec`'s guard and looked exactly like
+"this codec is a poor fit", so the binary search never saw the top of its own
+range. `_encode_jpeg` now raises `ImageFile.MAXBLOCK` and retries without
+`optimize`. If you touch JPEG encoding, keep the retry.
 
 ### pikepdf returns native Python scalars
 

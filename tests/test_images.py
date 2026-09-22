@@ -12,6 +12,7 @@ from PIL import Image
 
 from conftest import flat_image, gradient_image, noisy_image
 from pdfoptimize.images import (
+    PSNR_FLOOR_CEILING,
     detail,
     encode_candidates,
     load_pil,
@@ -21,6 +22,19 @@ from pdfoptimize.images import (
     reduce_complexity,
 )
 from pdfoptimize.profiles import Web
+
+
+def _best_achievable(im, filt):
+    """Highest PSNR the given codec reaches at its maximum setting."""
+    buf = io.BytesIO()
+    if filt == "/DCTDecode":
+        im.save(buf, format="JPEG", quality=95, optimize=True, subsampling=0)
+    else:
+        im.save(buf, format="JPEG2000", quality_mode="dB",
+                quality_layers=[64.0], irreversible=True)
+    dec = Image.open(io.BytesIO(buf.getvalue()))
+    dec.load()
+    return psnr(im, dec)
 
 
 class TestNormalizeMode:
@@ -65,7 +79,8 @@ class TestMetrics:
         smooth = psnr_floor(profile, gradient_image(256, 256))
         busy = psnr_floor(profile, noisy_image(256, 256))
         assert smooth > busy + 10.0
-        assert smooth > 48.0
+        # A flat gradient saturates the adaptive term and lands on the cap.
+        assert smooth == pytest.approx(PSNR_FLOOR_CEILING)
         assert busy < 42.0
 
     def test_floor_rises_with_quality_setting(self):
@@ -91,8 +106,15 @@ class TestReduceComplexity:
 
 
 class TestEncodeCandidates:
-    def test_every_candidate_clears_the_quality_floor(self):
-        """The core invariant. Without it, gradients band."""
+    def test_candidates_clear_the_floor_or_are_best_effort(self):
+        """The core invariant. Without it, gradients band.
+
+        Every lossy candidate either clears the image's floor, or is the best
+        that codec can manage — a candidate is never chosen merely because it
+        was small. The second case exists because the floor is capped, so
+        some images cannot reach it at any setting; returning nothing there
+        meant the image was left completely untouched.
+        """
         profile = Web()
         for im in (gradient_image(256, 256), noisy_image(256, 256)):
             floor = psnr_floor(profile, im)
@@ -101,8 +123,34 @@ class TestEncodeCandidates:
                     continue                      # lossless, exempt
                 dec = Image.open(io.BytesIO(spec["data"]))
                 dec.load()
-                assert psnr(im, dec) >= floor - 0.01, \
-                    f"{spec['filter']} fell below the floor"
+                score = psnr(im, dec)
+                if score >= floor - 0.01:
+                    continue
+                ceiling = _best_achievable(im, spec["filter"])
+                assert score >= ceiling - 0.5, (
+                    f"{spec['filter']} is below the floor at {score:.2f} dB "
+                    f"but the codec could reach {ceiling:.2f} dB")
+
+    def test_floor_never_exceeds_the_ceiling(self):
+        """Uncapped, the adaptive term demanded ~53.6 dB at quality 0.8.
+
+        Nothing could satisfy that cheaply, so whole decks came out larger
+        than their original encoding.
+        """
+        profile = Web()
+        profile.compression_quality = 1.0
+        for im in (gradient_image(128, 128), flat_image(128, 128),
+                   noisy_image(128, 128)):
+            assert psnr_floor(profile, im) <= PSNR_FLOOR_CEILING
+
+    def test_unreachable_floor_still_yields_a_lossy_candidate(self):
+        """Regression: returning nothing left the image entirely untouched."""
+        profile = Web()
+        profile.compression_quality = 1.0
+        im = noisy_image(128, 128)
+        filters = {spec["filter"] for _n, spec in encode_candidates(im, profile)}
+        assert filters - {"/FlateDecode"}, \
+            "no lossy candidate offered; the image would be left alone"
 
     def test_declared_colourspace_matches_channel_count(self):
         """Regression: /DeviceRGB declared over a 4-channel stream."""

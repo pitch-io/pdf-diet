@@ -15,18 +15,26 @@ import math
 import zlib
 
 import pikepdf
-from PIL import Image, ImageChops, ImageFilter, ImageStat
+from PIL import Image, ImageChops, ImageFile, ImageFilter, ImageStat
 
 from .profiles import Profile
 
 __all__ = [
     "flate", "psnr", "detail", "psnr_floor", "normalize_mode", "load_pil",
     "encode_candidates", "reduce_complexity", "set_image", "ENCODABLE_MODES",
+    "PSNR_FLOOR_CEILING",
 ]
 
 # Pillow refuses very large images by default as a decompression-bomb guard.
 # We are processing documents the user already has, so lift it.
 Image.MAX_IMAGE_PIXELS = None
+
+# Pillow writes JPEG through a fixed-size buffer, and `optimize=True` needs the
+# whole scan to fit in it. On noisy images at high quality it does not, and the
+# save raises OSError("broken data stream when writing image file"). Raising
+# the block size fixes the common case; _encode_jpeg retries without optimize
+# for the rest.
+ImageFile.MAXBLOCK = max(getattr(ImageFile, "MAXBLOCK", 0), 4 * 1024 * 1024)
 
 #: PIL modes that map onto a PDF colour space directly.
 ENCODABLE_MODES = {"1", "L", "P", "RGB"}
@@ -74,6 +82,17 @@ def detail(im: Image.Image) -> float:
         ImageChops.difference(g, g.filter(ImageFilter.GaussianBlur(2)))).mean[0]
 
 
+#: Absolute ceiling on the per-image quality floor, in dB.
+#:
+#: Without it the adaptive term below runs away on documents made mostly of
+#: flat graphics: at quality 0.8 a smooth image demanded ~53.6 dB, which
+#: nothing could satisfy cheaply, so whole decks came out larger than the
+#: original encoding or were skipped outright. Measured across a 46-deck
+#: corpus, 48 dB is the point where the size regression disappears without
+#: banding returning. Lower it and gradients start to mottle.
+PSNR_FLOOR_CEILING = 48.0
+
+
 def psnr_floor(profile: Profile, im: Image.Image) -> float:
     """How much fidelity this particular image needs, in dB.
 
@@ -83,9 +102,13 @@ def psnr_floor(profile: Profile, im: Image.Image) -> float:
     ripple as banding and needs north of 50 dB. A single threshold cannot
     serve both: tuned for photographs it mottles gradients, tuned for
     gradients it triples the size of every photograph.
+
+    The result is capped at :data:`PSNR_FLOOR_CEILING`; above that the extra
+    fidelity is not visible and is very expensive.
     """
     q = max(0.0, min(1.0, profile.compression_quality))
-    return 18.0 + 22.0 * q + min(18.0, 12.0 / (0.3 + detail(im)))
+    adaptive = 18.0 + 22.0 * q + min(18.0, 12.0 / (0.3 + detail(im)))
+    return min(adaptive, PSNR_FLOOR_CEILING)
 
 
 # --------------------------------------------------------------------------
@@ -154,11 +177,24 @@ def reduce_complexity(im: Image.Image) -> Image.Image:
 # --------------------------------------------------------------------------
 
 def _encode_jpeg(im: Image.Image, q: int, profile: Profile) -> bytes:
-    buf = io.BytesIO()
-    im.save(buf, format="JPEG", quality=q, optimize=True,
-            progressive=profile.progressive_jpeg,
-            subsampling=(0 if q >= 90 else 2))
-    return buf.getvalue()
+    """Encode as JPEG, falling back if Pillow's optimiser cannot fit the scan.
+
+    `optimize=True` buys a few percent by rebuilding the Huffman tables, but
+    it needs the entire scan buffered and raises OSError when it does not fit.
+    Letting that propagate silently capped achievable JPEG quality at around
+    89 on noisy images, so the search never saw the high end of the range.
+    """
+    last: Exception | None = None
+    for optimize in (True, False):
+        buf = io.BytesIO()
+        try:
+            im.save(buf, format="JPEG", quality=q, optimize=optimize,
+                    progressive=profile.progressive_jpeg,
+                    subsampling=(0 if q >= 90 else 2))
+            return buf.getvalue()
+        except OSError as exc:
+            last = exc
+    raise last if last else RuntimeError("JPEG encoding failed")
 
 
 def _encode_jp2(im: Image.Image, db: int) -> bytes:
@@ -193,23 +229,36 @@ def _search_codec(encode, lo: int, hi: int, im: Image.Image, cs: str,
     the cheapest acceptable setting in ~6 encodes. A fixed ladder was tried
     first and overshot badly: the gap between two rungs was the difference
     between 17 KB and 189 KB on a full-page gradient.
+
+    If nothing in the range clears the floor, the highest-quality encoding
+    tried is returned rather than nothing. Returning nothing meant the caller
+    fell back to lossless, which is normally larger than the source encoding,
+    so the image was left completely untouched -- losing the downsampling
+    saving as well. Best effort at the top of the range is strictly better,
+    and the caller still only uses it if it actually beats the original.
     """
     best: tuple[int, bytes] | None = None
+    fallback: tuple[int, bytes] | None = None
+    best_psnr = -1.0
     while lo <= hi:
         mid = (lo + hi) // 2
         try:
             data = encode(mid)
         except Exception:
-            return best
+            break
         dec = _shape_ok(data, im, cs)
         if dec is None:
-            return best
-        if psnr(im, dec) >= floor:
+            break
+        score = psnr(im, dec)
+        if score > best_psnr:
+            best_psnr = score
+            fallback = (len(data), data)
+        if score >= floor:
             best = (len(data), data)
             hi = mid - 1
         else:
             lo = mid + 1
-    return best
+    return best or fallback
 
 
 def encode_candidates(im: Image.Image, profile: Profile) -> list[tuple[int, dict]]:
