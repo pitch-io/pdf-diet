@@ -18,6 +18,7 @@ __all__ = ["adjust_matrix", "rewrite_placements", "prune", "dedupe"]
 # Placement rewriting (for cropped images)
 # --------------------------------------------------------------------------
 
+
 def adjust_matrix(uv: tuple[float, float, float, float]) -> tuple:
     """Matrix mapping the cropped image back onto the original footprint.
 
@@ -28,8 +29,7 @@ def adjust_matrix(uv: tuple[float, float, float, float]) -> tuple:
     return (u1 - u0, 0.0, 0.0, v1 - v0, u0, v0)
 
 
-def _rewrite_stream(pdf, owner, resources, adjust: dict[tuple, tuple],
-                    done: set) -> bool:
+def _rewrite_stream(pdf, owner, resources, adjust: dict[tuple, tuple], done: set) -> bool:
     """Wrap `Do` of cropped images with a corrective `cm`."""
     if resources is None:
         return False
@@ -69,8 +69,7 @@ def _rewrite_stream(pdf, owner, resources, adjust: dict[tuple, tuple],
         if str(op) == "Do" and operands and str(operands[0]) in names:
             m = names[str(operands[0])]
             new_ops.append(([], pikepdf.Operator("q")))
-            new_ops.append(([round(float(v), 6) for v in m],
-                            pikepdf.Operator("cm")))
+            new_ops.append(([round(float(v), 6) for v in m], pikepdf.Operator("cm")))
             new_ops.append((operands, op))
             new_ops.append(([], pikepdf.Operator("Q")))
             changed = True
@@ -100,6 +99,7 @@ def rewrite_placements(pdf: pikepdf.Pdf, adjust: dict[tuple, tuple]) -> None:
 # --------------------------------------------------------------------------
 # Object graph pruning
 # --------------------------------------------------------------------------
+
 
 def prune(pdf: pikepdf.Pdf, r: RemovalOptions) -> None:
     """Discard the parts of the object graph the profile does not keep."""
@@ -135,6 +135,7 @@ def prune(pdf: pikepdf.Pdf, r: RemovalOptions) -> None:
 # --------------------------------------------------------------------------
 # Redundant object elimination
 # --------------------------------------------------------------------------
+
 
 def _is_ref(v) -> bool:
     """True if ``v`` is an indirect reference.

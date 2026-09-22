@@ -17,9 +17,9 @@ from pikepdf import Dictionary, Name
 from PIL import Image
 
 from conftest import PAGE_H, PAGE_W, gradient_image
-from pdfoptimize import MinimalFileSize, Web, optimize_document
-from pdfoptimize.document import dedupe
-from pdfoptimize.images import load_pil, psnr, psnr_floor
+from pdfdiet import MinimalFileSize, Web, optimize_document
+from pdfdiet.document import dedupe
+from pdfdiet.images import load_pil, psnr, psnr_floor
 
 
 def _decoded_images(path):
@@ -32,8 +32,7 @@ def _decoded_images(path):
             if o.get("/Subtype") != pikepdf.Name.Image or o.get("/ImageMask"):
                 continue
             im = load_pil(o)
-            out.append((str(o.get("/ColorSpace")), im,
-                        (int(o.Width), int(o.Height))))
+            out.append((str(o.get("/ColorSpace")), im, (int(o.Width), int(o.Height))))
         return out
 
 
@@ -46,8 +45,9 @@ class TestColourSpaceConsistency:
     /DeviceRGB. Poppler tolerated the result; other viewers rendered grey.
     """
 
-    @pytest.mark.parametrize("fixture", ["gradient_pdf", "smask_pdf",
-                                         "opaque_smask_pdf", "mixed_pdf"])
+    @pytest.mark.parametrize(
+        "fixture", ["gradient_pdf", "smask_pdf", "opaque_smask_pdf", "mixed_pdf"]
+    )
     def test_channels_match_declared_colourspace(self, fixture, request, tmp_path):
         src = request.getfixturevalue(fixture)
         out = tmp_path / "out.pdf"
@@ -58,8 +58,9 @@ class TestColourSpaceConsistency:
         for cs, im, size in results:
             assert im is not None, f"{cs} image failed to decode"
             want = 3 if cs == "/DeviceRGB" else 1
-            assert len(im.getbands()) == want, \
+            assert len(im.getbands()) == want, (
                 f"{cs} declared but stream decodes to {im.mode}"
+            )
             assert im.size == size, "dictionary size disagrees with the stream"
 
     def test_masked_image_keeps_its_colour(self, smask_pdf, tmp_path):
@@ -94,7 +95,8 @@ class TestNoBanding:
         floor = psnr_floor(Web(), reference)
         measured = psnr(reference, got)
         assert measured >= floor - 1.0, (
-            f"gradient came back at {measured:.1f} dB, floor is {floor:.1f} dB")
+            f"gradient came back at {measured:.1f} dB, floor is {floor:.1f} dB"
+        )
 
     def test_the_cheap_banding_encoding_is_refused(self):
         """The optimizer must decline an encoding that is smaller but banded.
@@ -105,25 +107,32 @@ class TestNoBanding:
         """
         import io
 
-        from pdfoptimize.images import encode_candidates
+        from pdfdiet.images import encode_candidates
 
         im = gradient_image(512, 512)
         profile = Web()
         floor = psnr_floor(profile, im)
 
         cheap = io.BytesIO()
-        im.save(cheap, format="JPEG2000", quality_mode="dB",
-                quality_layers=[40.0], irreversible=True)
+        im.save(
+            cheap,
+            format="JPEG2000",
+            quality_mode="dB",
+            quality_layers=[40.0],
+            irreversible=True,
+        )
         cheap_bytes = cheap.getvalue()
 
         decoded = Image.open(io.BytesIO(cheap_bytes))
         decoded.load()
-        assert psnr(im, decoded) < floor, \
+        assert psnr(im, decoded) < floor, (
             "fixture no longer demonstrates the hazard; pick a lower rate"
+        )
 
         chosen = min(c[0] for c in encode_candidates(im, profile))
         assert chosen > len(cheap_bytes), (
-            "optimizer picked an encoding at or below the banding threshold")
+            "optimizer picked an encoding at or below the banding threshold"
+        )
 
 
 class TestDedupe:
@@ -141,7 +150,7 @@ class TestDedupe:
 
         names = {}
         for i in range(2):
-            xo = pdf.make_stream(payload)       # byte-identical twins
+            xo = pdf.make_stream(payload)  # byte-identical twins
             xo.Type, xo.Subtype = Name.XObject, Name.Image
             xo.Width, xo.Height = im.size
             xo.ColorSpace = Name.DeviceRGB
@@ -152,7 +161,8 @@ class TestDedupe:
         page = pdf.add_blank_page(page_size=(PAGE_W, PAGE_H))
         page.Resources = Dictionary(XObject=Dictionary(**names))
         page.Contents = pdf.make_stream(
-            b"q 200 0 0 200 0 0 cm /Im0 Do Q q 200 0 0 200 300 0 cm /Im1 Do Q")
+            b"q 200 0 0 200 0 0 cm /Im0 Do Q q 200 0 0 200 300 0 cm /Im1 Do Q"
+        )
         pdf.save(str(path))
         return str(path)
 
@@ -162,8 +172,9 @@ class TestDedupe:
             merged = dedupe(pdf)
             assert merged >= 1
             xobjs = pdf.pages[0].Resources.XObject
-            assert xobjs["/Im0"].objgen == xobjs["/Im1"].objgen, \
+            assert xobjs["/Im0"].objgen == xobjs["/Im1"].objgen, (
                 "both names should now resolve to one object"
+            )
 
     def test_dedupe_is_lossless(self, tmp_path):
         src = self._pdf_with_duplicate_images(tmp_path / "dup.pdf")
@@ -178,9 +189,12 @@ class TestDedupe:
         out = tmp_path / "out.pdf"
         result = optimize_document(src, out, Web())
         with pikepdf.open(out) as pdf:
-            images = [o for o in pdf.objects
-                      if isinstance(o, pikepdf.Stream)
-                      and o.get("/Subtype") == pikepdf.Name.Image]
+            images = [
+                o
+                for o in pdf.objects
+                if isinstance(o, pikepdf.Stream)
+                and o.get("/Subtype") == pikepdf.Name.Image
+            ]
         assert len(images) == 1, "duplicate images should collapse to one"
         assert result.after_bytes < result.before_bytes
 

@@ -18,7 +18,7 @@ Pdftools SDK `Optimizer.optimizeDocument` call.
 - Soft-mask handling: opaque masks dropped, binary masks converted to 1-bit
   stencils.
 - Iterative deduplication of byte-identical streams.
-- CLI (`pdfoptimize`) and library API.
+- CLI (`pdf-diet`) and library API.
 
 ### Fixed during development
 - Images carrying a soft mask decoded as RGBA and were written as four-channel

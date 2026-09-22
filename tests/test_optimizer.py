@@ -9,8 +9,8 @@ import os
 import pikepdf
 import pytest
 
-from pdfoptimize import MinimalFileSize, Web, __version__, optimize_document
-from pdfoptimize.cli import main
+from pdfdiet import MinimalFileSize, Web, __version__, optimize_document
+from pdfdiet.cli import main
 
 
 def _images(path):
@@ -27,14 +27,16 @@ def _images(path):
                 continue
             if o.get("/Subtype") != pikepdf.Name.Image or o.get("/ImageMask"):
                 continue
-            out.append({
-                "width": int(o.Width),
-                "height": int(o.Height),
-                "filter": str(o.get("/Filter")),
-                "colorspace": str(o.get("/ColorSpace")),
-                "smask": "/SMask" in o,
-                "mask": "/Mask" in o,
-            })
+            out.append(
+                {
+                    "width": int(o.Width),
+                    "height": int(o.Height),
+                    "filter": str(o.get("/Filter")),
+                    "colorspace": str(o.get("/ColorSpace")),
+                    "smask": "/SMask" in o,
+                    "mask": "/Mask" in o,
+                }
+            )
         return out
 
 
@@ -131,7 +133,8 @@ class TestSoftMasks:
         has_transparency = any(
             "/SMask" in o or "/Mask" in o
             for o in pdf.objects
-            if isinstance(o, pikepdf.Stream) and o.get("/Subtype") == pikepdf.Name.Image)
+            if isinstance(o, pikepdf.Stream) and o.get("/Subtype") == pikepdf.Name.Image
+        )
         assert has_transparency, "a graded mask must survive in some form"
 
 

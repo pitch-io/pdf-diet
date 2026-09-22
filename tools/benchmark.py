@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright 2026 Pitch Software GmbH
 # SPDX-License-Identifier: Apache-2.0
-"""Benchmark pdfoptimize against reference output from another optimizer.
+"""Benchmark pdf-diet against reference output from another optimizer.
 
 Expects a directory of triples following the naming convention:
 
@@ -9,7 +9,7 @@ Expects a directory of triples following the naming convention:
     <name>.new.pdf              reference output at quality 0.6
     <name>.new-0.8.pdf          reference output at quality 0.8
 
-For each deck it runs pdfoptimize at the matching quality, then reports size
+For each deck it runs pdf-diet at the matching quality, then reports size
 and — with ``--render`` — visual fidelity measured against the original.
 
 Note that the two tools' quality scales are not necessarily the same number
@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
-import pdfoptimize  # noqa: E402
+import pdfdiet  # noqa: E402
 
 SUFFIXES = {
     "uncompressed.pdf": "raw",
@@ -96,6 +96,7 @@ class Row:
 # Discovery
 # --------------------------------------------------------------------------
 
+
 def discover(directory: str) -> list[Case]:
     cases: dict[str, Case] = {}
     for entry in sorted(os.listdir(directory)):
@@ -118,8 +119,10 @@ def discover(directory: str) -> list[Case]:
 # Rendering and comparison
 # --------------------------------------------------------------------------
 
+
 def page_count(path: str) -> int:
     import pikepdf
+
     try:
         with pikepdf.open(path) as pdf:
             return len(pdf.pages)
@@ -132,14 +135,27 @@ def render(path: str, out_dir: str, pages: list[int], dpi: int) -> dict[int, str
     result = {}
     for page in pages:
         prefix = os.path.join(out_dir, f"p{page}")
-        cmd = ["pdftoppm", "-png", "-r", str(dpi),
-               "-f", str(page), "-l", str(page), path, prefix]
+        cmd = [
+            "pdftoppm",
+            "-png",
+            "-r",
+            str(dpi),
+            "-f",
+            str(page),
+            "-l",
+            str(page),
+            path,
+            prefix,
+        ]
         try:
             subprocess.run(cmd, check=True, capture_output=True, timeout=300)
         except Exception:
             continue
-        hits = [f for f in os.listdir(out_dir)
-                if f.startswith(f"p{page}-") and f.endswith(".png")]
+        hits = [
+            f
+            for f in os.listdir(out_dir)
+            if f.startswith(f"p{page}-") and f.endswith(".png")
+        ]
         if hits:
             result[page] = os.path.join(out_dir, hits[0])
     return result
@@ -147,6 +163,7 @@ def render(path: str, out_dir: str, pages: list[int], dpi: int) -> dict[int, str
 
 def psnr_files(a: str, b: str) -> float | None:
     from PIL import Image, ImageChops
+
     try:
         ia = Image.open(a).convert("RGB")
         ib = Image.open(b).convert("RGB")
@@ -168,8 +185,9 @@ def psnr_files(a: str, b: str) -> float | None:
     return 99.0 if mse == 0 else 10.0 * math.log10(255.0 * 255.0 / mse)
 
 
-def compare_visually(raw: str, ref: str, ours: str, sample: int,
-                     dpi: int) -> tuple[float | None, float | None]:
+def compare_visually(
+    raw: str, ref: str, ours: str, sample: int, dpi: int
+) -> tuple[float | None, float | None]:
     """Mean PSNR of reference and our output against the original."""
     n = page_count(raw)
     if n == 0:
@@ -201,29 +219,44 @@ def compare_visually(raw: str, ref: str, ours: str, sample: int,
                 if s is not None:
                     our_scores.append(s)
 
-    return (statistics.mean(ref_scores) if ref_scores else None,
-            statistics.mean(our_scores) if our_scores else None)
+    return (
+        statistics.mean(ref_scores) if ref_scores else None,
+        statistics.mean(our_scores) if our_scores else None,
+    )
 
 
 # --------------------------------------------------------------------------
 # Running one case
 # --------------------------------------------------------------------------
 
-def run_case(case: Case, quality: str, profile_name: str, out_dir: str,
-             do_render: bool, sample: int, dpi: int) -> Row:
+
+def run_case(
+    case: Case,
+    quality: str,
+    profile_name: str,
+    out_dir: str,
+    do_render: bool,
+    sample: int,
+    dpi: int,
+) -> Row:
     ref = case.references[quality]
     our = os.path.join(out_dir, f"{case.name}.ours-{quality}.pdf")
 
-    row = Row(name=case.name, quality=quality, pages=page_count(case.raw),
-              raw_bytes=os.path.getsize(case.raw),
-              ref_bytes=os.path.getsize(ref), our_bytes=0)
+    row = Row(
+        name=case.name,
+        quality=quality,
+        pages=page_count(case.raw),
+        raw_bytes=os.path.getsize(case.raw),
+        ref_bytes=os.path.getsize(ref),
+        our_bytes=0,
+    )
 
-    profile = pdfoptimize.PROFILES[profile_name]()
+    profile = pdfdiet.PROFILES[profile_name]()
     profile.compression_quality = float(quality)
 
     start = time.perf_counter()
     try:
-        pdfoptimize.optimize_document(case.raw, our, profile)
+        pdfdiet.optimize_document(case.raw, our, profile)
     except Exception as exc:
         row.error = f"{type(exc).__name__}: {exc}"
         return row
@@ -232,8 +265,7 @@ def run_case(case: Case, quality: str, profile_name: str, out_dir: str,
 
     if do_render:
         try:
-            row.ref_psnr, row.our_psnr = compare_visually(
-                case.raw, ref, our, sample, dpi)
+            row.ref_psnr, row.our_psnr = compare_visually(case.raw, ref, our, sample, dpi)
         except Exception as exc:
             row.error = f"render: {type(exc).__name__}: {exc}"
 
@@ -244,6 +276,7 @@ def run_case(case: Case, quality: str, profile_name: str, out_dir: str,
 # Reporting
 # --------------------------------------------------------------------------
 
+
 def mb(n: int) -> str:
     return f"{n / 1e6:.1f}"
 
@@ -252,8 +285,10 @@ def report(rows: list[Row], do_render: bool) -> None:
     ok = [r for r in rows if not r.error and r.our_bytes]
     bad = [r for r in rows if r.error]
 
-    header = (f"{'deck':<42} {'q':>4} {'pg':>4} {'raw':>8} "
-              f"{'theirs':>8} {'ours':>8} {'size':>8}")
+    header = (
+        f"{'deck':<42} {'q':>4} {'pg':>4} {'raw':>8} "
+        f"{'theirs':>8} {'ours':>8} {'size':>8}"
+    )
     if do_render:
         header += f" {'theirs dB':>10} {'ours dB':>9} {'dB':>7}"
     print("\n" + header)
@@ -261,12 +296,16 @@ def report(rows: list[Row], do_render: bool) -> None:
 
     for r in sorted(rows, key=lambda r: (r.quality, r.name)):
         if r.error:
-            print(f"{r.name[:42]:<42} {r.quality:>4} {'':>4} {'':>8} {'':>8} "
-                  f"{'FAILED':>8}  {r.error[:40]}")
+            print(
+                f"{r.name[:42]:<42} {r.quality:>4} {'':>4} {'':>8} {'':>8} "
+                f"{'FAILED':>8}  {r.error[:40]}"
+            )
             continue
-        line = (f"{r.name[:42]:<42} {r.quality:>4} {r.pages:>4} "
-                f"{mb(r.raw_bytes):>8} {mb(r.ref_bytes):>8} {mb(r.our_bytes):>8} "
-                f"{r.size_delta:>+7.1f}%")
+        line = (
+            f"{r.name[:42]:<42} {r.quality:>4} {r.pages:>4} "
+            f"{mb(r.raw_bytes):>8} {mb(r.ref_bytes):>8} {mb(r.our_bytes):>8} "
+            f"{r.size_delta:>+7.1f}%"
+        )
         if do_render:
             rp = f"{r.ref_psnr:.2f}" if r.ref_psnr is not None else "-"
             op = f"{r.our_psnr:.2f}" if r.our_psnr is not None else "-"
@@ -282,27 +321,35 @@ def report(rows: list[Row], do_render: bool) -> None:
         raw = sum(r.raw_bytes for r in sel)
         theirs = sum(r.ref_bytes for r in sel)
         ours = sum(r.our_bytes for r in sel)
-        print(f"quality {quality}: {len(sel)} decks   "
-              f"raw {raw / 1e9:.2f} GB -> theirs {theirs / 1e6:.0f} MB "
-              f"({raw / theirs:.1f}x), ours {ours / 1e6:.0f} MB "
-              f"({raw / ours:.1f}x)   "
-              f"we are {100 * (ours / theirs - 1):+.1f}% on size")
+        print(
+            f"quality {quality}: {len(sel)} decks   "
+            f"raw {raw / 1e9:.2f} GB -> theirs {theirs / 1e6:.0f} MB "
+            f"({raw / theirs:.1f}x), ours {ours / 1e6:.0f} MB "
+            f"({raw / ours:.1f}x)   "
+            f"we are {100 * (ours / theirs - 1):+.1f}% on size"
+        )
         deltas = [r.size_delta for r in sel]
         smaller = sum(1 for d in deltas if d < 0)
-        print(f"            per-deck size delta: "
-              f"median {statistics.median(deltas):+.1f}%, "
-              f"best {min(deltas):+.1f}%, worst {max(deltas):+.1f}%   "
-              f"smaller on {smaller}/{len(deltas)}")
+        print(
+            f"            per-deck size delta: "
+            f"median {statistics.median(deltas):+.1f}%, "
+            f"best {min(deltas):+.1f}%, worst {max(deltas):+.1f}%   "
+            f"smaller on {smaller}/{len(deltas)}"
+        )
         if do_render:
             pd = [r.psnr_delta for r in sel if r.psnr_delta is not None]
             if pd:
                 better = sum(1 for d in pd if d > 0)
-                print(f"            per-deck PSNR delta: "
-                      f"median {statistics.median(pd):+.2f} dB, "
-                      f"better on {better}/{len(pd)}")
+                print(
+                    f"            per-deck PSNR delta: "
+                    f"median {statistics.median(pd):+.2f} dB, "
+                    f"better on {better}/{len(pd)}"
+                )
         total_time = sum(r.seconds for r in sel)
-        print(f"            wall time {total_time:.0f}s total, "
-              f"{total_time / len(sel):.1f}s per deck")
+        print(
+            f"            wall time {total_time:.0f}s total, "
+            f"{total_time / len(sel):.1f}s per deck"
+        )
     if bad:
         print(f"\n{len(bad)} failures")
 
@@ -310,39 +357,83 @@ def report(rows: list[Row], do_render: bool) -> None:
 def write_csv(rows: list[Row], path: str) -> None:
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
-        w.writerow(["deck", "quality", "pages", "raw_bytes", "their_bytes",
-                    "our_bytes", "size_delta_pct", "their_psnr", "our_psnr",
-                    "psnr_delta", "seconds", "error"])
+        w.writerow(
+            [
+                "deck",
+                "quality",
+                "pages",
+                "raw_bytes",
+                "their_bytes",
+                "our_bytes",
+                "size_delta_pct",
+                "their_psnr",
+                "our_psnr",
+                "psnr_delta",
+                "seconds",
+                "error",
+            ]
+        )
         for r in rows:
-            w.writerow([r.name, r.quality, r.pages, r.raw_bytes, r.ref_bytes,
-                        r.our_bytes, f"{r.size_delta:.2f}",
-                        f"{r.ref_psnr:.3f}" if r.ref_psnr is not None else "",
-                        f"{r.our_psnr:.3f}" if r.our_psnr is not None else "",
-                        f"{r.psnr_delta:.3f}" if r.psnr_delta is not None else "",
-                        f"{r.seconds:.2f}", r.error or ""])
+            w.writerow(
+                [
+                    r.name,
+                    r.quality,
+                    r.pages,
+                    r.raw_bytes,
+                    r.ref_bytes,
+                    r.our_bytes,
+                    f"{r.size_delta:.2f}",
+                    f"{r.ref_psnr:.3f}" if r.ref_psnr is not None else "",
+                    f"{r.our_psnr:.3f}" if r.our_psnr is not None else "",
+                    f"{r.psnr_delta:.3f}" if r.psnr_delta is not None else "",
+                    f"{r.seconds:.2f}",
+                    r.error or "",
+                ]
+            )
     print(f"\nwrote {path}")
 
 
 def main(argv=None) -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("directory",
-                    help="dir of <name>.{uncompressed,new,new-0.8}.pdf")
-    ap.add_argument("-o", "--out-dir", default=None,
-                    help="where to write our output (default: a temp dir, discarded)")
-    ap.add_argument("-p", "--profile", default="web",
-                    choices=sorted(pdfoptimize.PROFILES))
-    ap.add_argument("-q", "--quality", action="append", default=None,
-                    choices=["0.6", "0.8"],
-                    help="which reference qualities to compare (default: both)")
-    ap.add_argument("-n", "--limit", type=int, default=None,
-                    help="only the first N decks")
-    ap.add_argument("-j", "--jobs", type=int, default=max(1, (os.cpu_count() or 4) // 2),
-                    help="parallel decks (each is memory hungry)")
-    ap.add_argument("--render", action="store_true",
-                    help="also measure visual fidelity (needs pdftoppm)")
-    ap.add_argument("--sample-pages", type=int, default=8,
-                    help="pages per deck to render (default: 8)")
+    ap = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
+    ap.add_argument("directory", help="dir of <name>.{uncompressed,new,new-0.8}.pdf")
+    ap.add_argument(
+        "-o",
+        "--out-dir",
+        default=None,
+        help="where to write our output (default: a temp dir, discarded)",
+    )
+    ap.add_argument("-p", "--profile", default="web", choices=sorted(pdfdiet.PROFILES))
+    ap.add_argument(
+        "-q",
+        "--quality",
+        action="append",
+        default=None,
+        choices=["0.6", "0.8"],
+        help="which reference qualities to compare (default: both)",
+    )
+    ap.add_argument(
+        "-n", "--limit", type=int, default=None, help="only the first N decks"
+    )
+    ap.add_argument(
+        "-j",
+        "--jobs",
+        type=int,
+        default=max(1, (os.cpu_count() or 4) // 2),
+        help="parallel decks (each is memory hungry)",
+    )
+    ap.add_argument(
+        "--render",
+        action="store_true",
+        help="also measure visual fidelity (needs pdftoppm)",
+    )
+    ap.add_argument(
+        "--sample-pages",
+        type=int,
+        default=8,
+        help="pages per deck to render (default: 8)",
+    )
     ap.add_argument("--dpi", type=int, default=50, help="render DPI (default: 50)")
     ap.add_argument("--csv", default=None, help="also write results as CSV")
     args = ap.parse_args(argv)
@@ -353,8 +444,9 @@ def main(argv=None) -> int:
 
     cases = discover(args.directory)
     if not cases:
-        print(f"benchmark: no complete triples found in {args.directory}",
-              file=sys.stderr)
+        print(
+            f"benchmark: no complete triples found in {args.directory}", file=sys.stderr
+        )
         return 2
     cases.sort(key=lambda c: os.path.getsize(c.raw))
     if args.limit:
@@ -363,10 +455,15 @@ def main(argv=None) -> int:
     qualities = args.quality or ["0.6", "0.8"]
     jobs = [(c, q) for c in cases for q in qualities if q in c.references]
 
-    print(f"{len(cases)} decks, qualities {', '.join(qualities)}, "
-          f"profile {args.profile}, {len(jobs)} runs, {args.jobs} workers"
-          + (f", rendering {args.sample_pages} pages at {args.dpi} DPI"
-             if args.render else ""))
+    print(
+        f"{len(cases)} decks, qualities {', '.join(qualities)}, "
+        f"profile {args.profile}, {len(jobs)} runs, {args.jobs} workers"
+        + (
+            f", rendering {args.sample_pages} pages at {args.dpi} DPI"
+            if args.render
+            else ""
+        )
+    )
 
     tmp = None
     out_dir = args.out_dir
@@ -380,8 +477,16 @@ def main(argv=None) -> int:
     try:
         with concurrent.futures.ProcessPoolExecutor(max_workers=args.jobs) as pool:
             futures = {
-                pool.submit(run_case, c, q, args.profile, out_dir,
-                            args.render, args.sample_pages, args.dpi): (c, q)
+                pool.submit(
+                    run_case,
+                    c,
+                    q,
+                    args.profile,
+                    out_dir,
+                    args.render,
+                    args.sample_pages,
+                    args.dpi,
+                ): (c, q)
                 for c, q in jobs
             }
             for i, fut in enumerate(concurrent.futures.as_completed(futures), 1):
@@ -389,14 +494,23 @@ def main(argv=None) -> int:
                 try:
                     row = fut.result()
                 except Exception as exc:
-                    row = Row(name=case.name, quality=quality, pages=0,
-                              raw_bytes=os.path.getsize(case.raw),
-                              ref_bytes=os.path.getsize(case.references[quality]),
-                              our_bytes=0, error=f"{type(exc).__name__}: {exc}")
+                    row = Row(
+                        name=case.name,
+                        quality=quality,
+                        pages=0,
+                        raw_bytes=os.path.getsize(case.raw),
+                        ref_bytes=os.path.getsize(case.references[quality]),
+                        our_bytes=0,
+                        error=f"{type(exc).__name__}: {exc}",
+                    )
                 rows.append(row)
                 mark = "!" if row.error else "."
-                print(f"\r[{i}/{len(futures)}] {mark} {row.name[:50]:<50}",
-                      end="", file=sys.stderr, flush=True)
+                print(
+                    f"\r[{i}/{len(futures)}] {mark} {row.name[:50]:<50}",
+                    end="",
+                    file=sys.stderr,
+                    flush=True,
+                )
         print(file=sys.stderr)
         report(rows, args.render)
         if args.csv:

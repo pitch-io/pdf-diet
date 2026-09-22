@@ -3,7 +3,7 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "pdfoptimize"
+name = "pdf-diet"
 version = "1.0.0"
 description = "PDF compression on a permissively licensed stack: an open-source take on pdf-tools optimizeDocument"
 readme = "README.md"
@@ -21,6 +21,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Multimedia :: Graphics :: Graphics Conversion",
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
@@ -29,22 +30,42 @@ dependencies = [
     "pillow>=10.0",
 ]
 
-[project.optional-dependencies]
-dev = [
-    "pytest>=7.4",
-    "pytest-cov>=4.1",
-    "ruff>=0.5",
-]
-
 [project.scripts]
-pdfoptimize = "pdfoptimize.cli:main"
+"pdf-diet" = "pdfdiet.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/pitch-io/pdfoptimize"
-Issues = "https://github.com/pitch-io/pdfoptimize/issues"
+Homepage = "https://github.com/pitch-io/pdf-diet"
+Issues = "https://github.com/pitch-io/pdf-diet/issues"
+
+# PEP 735 dependency groups. Unlike [project.optional-dependencies], these are
+# never published with the package -- they exist only for people working on it.
+#   uv sync                 installs runtime deps + the dev group
+#   pip install --group dev same, for pip 25.1+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+    "ruff>=0.6",
+]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pdfoptimize"]
+packages = ["src/pdfdiet"]
+
+# Be explicit about the sdist. Reference decks live in examples/ and are real
+# customer documents running to well over a gigabyte; an allowlist keeps them
+# out by construction rather than relying on .gitignore, which no longer
+# excludes *.pdf.
+[tool.hatch.build.targets.sdist]
+include = [
+    "src/",
+    "tests/",
+    "tools/",
+    "*.md",
+    "LICENSE",
+    "NOTICE",
+    "pyproject.toml",
+    "uv.lock",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -70,6 +91,26 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*" = ["E501"]
 
+[tool.ruff.lint.isort]
+known-first-party = ["pdfdiet"]
+
+[tool.ruff.format]
+# Match the existing style: the codebase uses double quotes throughout and
+# hand-wrapped continuations that read better than a formatter's defaults.
+quote-style = "double"
+docstring-code-format = true
+
 [tool.coverage.run]
-source = ["pdfoptimize"]
+source = ["pdfdiet"]
 branch = true
+
+[tool.coverage.report]
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.uv]
+# Keep the resolver honest about the oldest interpreter we claim to support.
+required-version = ">=0.5"

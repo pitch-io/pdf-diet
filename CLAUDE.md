@@ -1,4 +1,4 @@
-# Working on pdfoptimize
+# Working on pdf-diet
 
 Orientation for agents and humans. Read the **Hazards** section before
 touching `images.py` or `document.py` — both contain non-obvious code that
@@ -14,13 +14,20 @@ which is why this exists at all rather than shelling out to `gs`.
 
 ## Commands
 
+Managed with [uv](https://docs.astral.sh/uv/); `uv.lock` is committed.
+
 ```bash
-pip install -e ".[dev]"      # install with test/lint extras
-pytest                       # full suite, ~30s, no external fixtures needed
-pytest -q tests/test_regression.py   # the bugs that shipped once
-ruff check src tests         # lint
-pdfoptimize in.pdf out.pdf -p minimal -v
+uv sync                              # create .venv from the lockfile
+uv run pytest                        # full suite, ~30s, no external fixtures
+uv run pytest tests/test_regression.py   # the bugs that shipped once
+uv run ruff check src tests tools     # lint
+uv run ruff format src tests tools    # format (CI checks this)
+uv run pdf-diet in.pdf out.pdf -p minimal -v
 ```
+
+Dev dependencies are a PEP 735 `[dependency-groups]` entry, not an extra, so
+with plain pip it is `pip install -e . --group dev` (pip 25.1+), never
+`.[dev]`.
 
 There is no network access needed and no test fixture larger than a few
 hundred KB; every test builds the PDF it needs in `tests/conftest.py`.
@@ -58,7 +65,7 @@ nothing it touches is distributed — the licensing story in README stands.
 ## Architecture
 
 ```
-src/pdfoptimize/
+src/pdfdiet/
   profiles.py    Profile dataclasses. Defaults come from the published
                  Pdftools API reference; do not "tidy" the numbers.
   geometry.py    Content-stream walking. Finds where each image lands

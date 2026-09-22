@@ -60,18 +60,19 @@ class Result:
         return 1.0 - self.after_bytes / self.before_bytes
 
     def __str__(self) -> str:
-        return (f"{self.input_path}: {self.before_bytes / 1e6:.2f} MB -> "
-                f"{self.output_path}: {self.after_bytes / 1e6:.2f} MB "
-                f"({self.ratio:.1f}x smaller, {100 * self.saved_fraction:.1f}% saved)")
+        return (
+            f"{self.input_path}: {self.before_bytes / 1e6:.2f} MB -> "
+            f"{self.output_path}: {self.after_bytes / 1e6:.2f} MB "
+            f"({self.ratio:.1f}x smaller, {100 * self.saved_fraction:.1f}% saved)"
+        )
 
 
 class Optimizer:
     """Compresses PDFs. Mirrors ``pdftools_sdk.optimization.optimizer.Optimizer``.
 
     Example:
-        >>> from pdfoptimize import Optimizer, MinimalFileSize
-        >>> result = Optimizer().optimize_document("in.pdf", "out.pdf",
-        ...                                        MinimalFileSize())
+        >>> from pdfdiet import Optimizer, MinimalFileSize
+        >>> result = Optimizer().optimize_document("in.pdf", "out.pdf", MinimalFileSize())
         >>> result.ratio > 1
         True
     """
@@ -83,14 +84,13 @@ class Optimizer:
         if self.verbose:
             print(*a)
 
-    def _handle_soft_mask(self, pdf, xobj, smask_obj, smask_im, plan,
-                          profile) -> None:
+    def _handle_soft_mask(self, pdf, xobj, smask_obj, smask_im, plan, profile) -> None:
         """Drop a fully-opaque mask, stencil a binary one, recompress the rest."""
         if smask_im.mode != "L":
             smask_im = smask_im.convert("L")
         lo, _hi = smask_im.getextrema()
 
-        if lo == 255:                                  # nothing is transparent
+        if lo == 255:  # nothing is transparent
             del xobj["/SMask"]
             return
 
@@ -115,14 +115,19 @@ class Optimizer:
             spec["cs"] = "/DeviceGray"
             set_image(smask_obj, pdf, spec, plan.size)
 
-    def optimize_document(self, in_path, out_path,
-                          profile: Profile | None = None) -> Result:
+    def optimize_document(
+        self, in_path, out_path, profile: Profile | None = None
+    ) -> Result:
         """Optimize ``in_path`` into ``out_path``. Returns a :class:`Result`."""
         profile = profile or Web()
         before_bytes = os.path.getsize(in_path)
         pdf = pikepdf.open(in_path)
-        result = Result(input_path=str(in_path), output_path=str(out_path),
-                        before_bytes=before_bytes, after_bytes=0)
+        result = Result(
+            input_path=str(in_path),
+            output_path=str(out_path),
+            before_bytes=before_bytes,
+            after_bytes=0,
+        )
 
         placements = scan_placements(pdf)
         adjust: dict[tuple, tuple] = {}
@@ -151,10 +156,14 @@ class Optimizer:
                     # The soft mask may have its own resolution.
                     sx = smask_im.width / ps[0].px[0]
                     sy = smask_im.height / ps[0].px[1]
-                    smask_im = smask_im.crop((
-                        int(plan.crop[0] * sx), int(plan.crop[1] * sy),
-                        max(1, int(plan.crop[2] * sx)),
-                        max(1, int(plan.crop[3] * sy))))
+                    smask_im = smask_im.crop(
+                        (
+                            int(plan.crop[0] * sx),
+                            int(plan.crop[1] * sy),
+                            max(1, int(plan.crop[2] * sx)),
+                            max(1, int(plan.crop[3] * sy)),
+                        )
+                    )
             if (im.width, im.height) != plan.size:
                 im = im.resize(plan.size, Image.LANCZOS)
             if smask_im is not None and (smask_im.width, smask_im.height) != plan.size:
@@ -173,18 +182,27 @@ class Optimizer:
             size, spec = min(cands, key=lambda c: c[0])
 
             if size >= before:
-                continue                    # recompression would not help
+                continue  # recompression would not help
 
             set_image(xobj, pdf, spec, plan.size)
             if plan.uv:
                 adjust[objgen] = adjust_matrix(plan.uv)
-            result.images.append(ImageResult(
-                objgen=objgen, source_px=ps[0].px, result_px=plan.size,
-                before_bytes=before, after_bytes=size, filter=spec["filter"],
-                cropped=plan.crop is not None))
-            self._log(f"  {ps[0].px[0]}x{ps[0].px[1]} -> "
-                      f"{plan.size[0]}x{plan.size[1]} {spec['filter']:<12} "
-                      f"{before / 1024:>9.1f}K -> {size / 1024:>8.1f}K")
+            result.images.append(
+                ImageResult(
+                    objgen=objgen,
+                    source_px=ps[0].px,
+                    result_px=plan.size,
+                    before_bytes=before,
+                    after_bytes=size,
+                    filter=spec["filter"],
+                    cropped=plan.crop is not None,
+                )
+            )
+            self._log(
+                f"  {ps[0].px[0]}x{ps[0].px[1]} -> "
+                f"{plan.size[0]}x{plan.size[1]} {spec['filter']:<12} "
+                f"{before / 1024:>9.1f}K -> {size / 1024:>8.1f}K"
+            )
 
         rewrite_placements(pdf, adjust)
         prune(pdf, profile.removal)
@@ -192,17 +210,20 @@ class Optimizer:
         if result.merged_objects:
             self._log(f"  deduplicated {result.merged_objects} redundant objects")
 
-        pdf.save(out_path,
-                 compress_streams=True,
-                 object_stream_mode=pikepdf.ObjectStreamMode.generate,
-                 linearize=False,
-                 recompress_flate=True,
-                 stream_decode_level=pikepdf.StreamDecodeLevel.generalized)
+        pdf.save(
+            out_path,
+            compress_streams=True,
+            object_stream_mode=pikepdf.ObjectStreamMode.generate,
+            linearize=False,
+            recompress_flate=True,
+            stream_decode_level=pikepdf.StreamDecodeLevel.generalized,
+        )
         result.after_bytes = os.path.getsize(out_path)
         return result
 
 
-def optimize_document(in_path, out_path, profile: Profile | None = None,
-                      verbose: bool = False) -> Result:
+def optimize_document(
+    in_path, out_path, profile: Profile | None = None, verbose: bool = False
+) -> Result:
     """Convenience wrapper around :class:`Optimizer`."""
     return Optimizer(verbose=verbose).optimize_document(in_path, out_path, profile)

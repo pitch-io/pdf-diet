@@ -11,7 +11,7 @@ import pytest
 from PIL import Image
 
 from conftest import flat_image, gradient_image, noisy_image
-from pdfoptimize.images import (
+from pdfdiet.images import (
     PSNR_FLOOR_CEILING,
     detail,
     encode_candidates,
@@ -21,7 +21,7 @@ from pdfoptimize.images import (
     psnr_floor,
     reduce_complexity,
 )
-from pdfoptimize.profiles import Web
+from pdfdiet.profiles import Web
 
 
 def _best_achievable(im, filt):
@@ -30,18 +30,33 @@ def _best_achievable(im, filt):
     if filt == "/DCTDecode":
         im.save(buf, format="JPEG", quality=95, optimize=True, subsampling=0)
     else:
-        im.save(buf, format="JPEG2000", quality_mode="dB",
-                quality_layers=[64.0], irreversible=True)
+        im.save(
+            buf,
+            format="JPEG2000",
+            quality_mode="dB",
+            quality_layers=[64.0],
+            irreversible=True,
+        )
     dec = Image.open(io.BytesIO(buf.getvalue()))
     dec.load()
     return psnr(im, dec)
 
 
 class TestNormalizeMode:
-    @pytest.mark.parametrize("mode,expected", [
-        ("RGB", "RGB"), ("L", "L"), ("1", "1"), ("P", "P"),
-        ("RGBA", "RGB"), ("LA", "L"), ("CMYK", "RGB"), ("I", "L"), ("F", "L"),
-    ])
+    @pytest.mark.parametrize(
+        "mode,expected",
+        [
+            ("RGB", "RGB"),
+            ("L", "L"),
+            ("1", "1"),
+            ("P", "P"),
+            ("RGBA", "RGB"),
+            ("LA", "L"),
+            ("CMYK", "RGB"),
+            ("I", "L"),
+            ("F", "L"),
+        ],
+    )
     def test_every_mode_becomes_encodable(self, mode, expected):
         im = Image.new(mode, (8, 8))
         assert normalize_mode(im).mode == expected
@@ -120,7 +135,7 @@ class TestEncodeCandidates:
             floor = psnr_floor(profile, im)
             for _size, spec in encode_candidates(im, profile):
                 if spec["filter"] == "/FlateDecode":
-                    continue                      # lossless, exempt
+                    continue  # lossless, exempt
                 dec = Image.open(io.BytesIO(spec["data"]))
                 dec.load()
                 score = psnr(im, dec)
@@ -129,7 +144,8 @@ class TestEncodeCandidates:
                 ceiling = _best_achievable(im, spec["filter"])
                 assert score >= ceiling - 0.5, (
                     f"{spec['filter']} is below the floor at {score:.2f} dB "
-                    f"but the codec could reach {ceiling:.2f} dB")
+                    f"but the codec could reach {ceiling:.2f} dB"
+                )
 
     def test_floor_never_exceeds_the_ceiling(self):
         """Uncapped, the adaptive term demanded ~53.6 dB at quality 0.8.
@@ -139,8 +155,7 @@ class TestEncodeCandidates:
         """
         profile = Web()
         profile.compression_quality = 1.0
-        for im in (gradient_image(128, 128), flat_image(128, 128),
-                   noisy_image(128, 128)):
+        for im in (gradient_image(128, 128), flat_image(128, 128), noisy_image(128, 128)):
             assert psnr_floor(profile, im) <= PSNR_FLOOR_CEILING
 
     def test_unreachable_floor_still_yields_a_lossy_candidate(self):
@@ -149,8 +164,9 @@ class TestEncodeCandidates:
         profile.compression_quality = 1.0
         im = noisy_image(128, 128)
         filters = {spec["filter"] for _n, spec in encode_candidates(im, profile)}
-        assert filters - {"/FlateDecode"}, \
+        assert filters - {"/FlateDecode"}, (
             "no lossy candidate offered; the image would be left alone"
+        )
 
     def test_declared_colourspace_matches_channel_count(self):
         """Regression: /DeviceRGB declared over a 4-channel stream."""
@@ -189,10 +205,13 @@ class TestLoadPil:
         in the image's own colour space.
         """
         pdf = pikepdf.open(smask_pdf)
-        images = [o for o in pdf.objects
-                  if isinstance(o, pikepdf.Stream)
-                  and o.get("/Subtype") == pikepdf.Name.Image
-                  and "/SMask" in o]
+        images = [
+            o
+            for o in pdf.objects
+            if isinstance(o, pikepdf.Stream)
+            and o.get("/Subtype") == pikepdf.Name.Image
+            and "/SMask" in o
+        ]
         assert images, "fixture should contain a masked image"
         im = load_pil(images[0])
         assert im is not None
@@ -200,9 +219,12 @@ class TestLoadPil:
 
     def test_mask_entries_are_restored_after_decoding(self, smask_pdf):
         pdf = pikepdf.open(smask_pdf)
-        img = next(o for o in pdf.objects
-                   if isinstance(o, pikepdf.Stream)
-                   and o.get("/Subtype") == pikepdf.Name.Image
-                   and "/SMask" in o)
+        img = next(
+            o
+            for o in pdf.objects
+            if isinstance(o, pikepdf.Stream)
+            and o.get("/Subtype") == pikepdf.Name.Image
+            and "/SMask" in o
+        )
         load_pil(img)
         assert "/SMask" in img, "load_pil must put the mask back"

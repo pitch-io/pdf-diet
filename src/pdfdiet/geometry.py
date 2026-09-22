@@ -20,8 +20,17 @@ import pikepdf
 from .profiles import Profile
 
 __all__ = [
-    "IDENTITY", "mat_mul", "apply", "is_axis_aligned", "bbox_of_unit_square",
-    "intersect", "union", "Placement", "scan_placements", "Plan", "plan_image",
+    "IDENTITY",
+    "mat_mul",
+    "apply",
+    "is_axis_aligned",
+    "bbox_of_unit_square",
+    "intersect",
+    "union",
+    "Placement",
+    "scan_placements",
+    "Plan",
+    "plan_image",
 ]
 
 #: Identity transform, in PDF's six-number matrix form.
@@ -36,9 +45,14 @@ def mat_mul(m: tuple, n: tuple) -> tuple:
     """Concatenate ``m`` then ``n`` (PDF convention: result = m x n)."""
     a, b, c, d, e, f = m
     A, B, C, D, E, F = n
-    return (a * A + b * C, a * B + b * D,
-            c * A + d * C, c * B + d * D,
-            e * A + f * C + E, e * B + f * D + F)
+    return (
+        a * A + b * C,
+        a * B + b * D,
+        c * A + d * C,
+        c * B + d * D,
+        e * A + f * C + E,
+        e * B + f * D + F,
+    )
 
 
 def apply(m: tuple, x: float, y: float) -> tuple[float, float]:
@@ -87,10 +101,10 @@ def union(a, b):
 class Placement:
     """One occurrence of an image XObject on a page."""
 
-    objgen: tuple            # pikepdf object id, stable within one Pdf
-    ctm: tuple               # matrix in force at the `Do`
-    clip: tuple | None       # device-space clip bbox, or None for unclipped
-    px: tuple[int, int]      # the XObject's own pixel dimensions
+    objgen: tuple  # pikepdf object id, stable within one Pdf
+    ctm: tuple  # matrix in force at the `Do`
+    clip: tuple | None  # device-space clip bbox, or None for unclipped
+    px: tuple[int, int]  # the XObject's own pixel dimensions
 
 
 _PATH_OPS = {"m", "l", "c", "v", "y", "re", "h"}
@@ -143,8 +157,7 @@ class _Walker:
                         x, y, w, h = nums
                         pts = [(x, y), (x + w, y), (x, y + h), (x + w, y + h)]
                     else:
-                        pts = [(nums[i], nums[i + 1])
-                               for i in range(0, len(nums) - 1, 2)]
+                        pts = [(nums[i], nums[i + 1]) for i in range(0, len(nums) - 1, 2)]
                     for px, py in pts:
                         dx, dy = apply(cur_ctm, px, py)
                         path_bbox = union(path_bbox, (dx, dy, dx, dy))
@@ -174,15 +187,17 @@ class _Walker:
                 subtype = xo.get("/Subtype")
                 if subtype == "/Image":
                     with contextlib.suppress(Exception):
-                        self.placements.append(Placement(
-                            objgen=xo.objgen,
-                            ctm=cur_ctm,
-                            clip=intersect(cur_clip, self.page_box),
-                            px=(int(xo.Width), int(xo.Height)),
-                        ))
+                        self.placements.append(
+                            Placement(
+                                objgen=xo.objgen,
+                                ctm=cur_ctm,
+                                clip=intersect(cur_clip, self.page_box),
+                                px=(int(xo.Width), int(xo.Height)),
+                            )
+                        )
                 elif subtype == "/Form":
                     key = xo.objgen
-                    if key in seen:          # cycle guard
+                    if key in seen:  # cycle guard
                         continue
                     fctm = cur_ctm
                     fm = xo.get("/Matrix")
@@ -194,18 +209,25 @@ class _Walker:
                     if bb is not None:
                         try:
                             v = [float(x) for x in bb]
-                            corners = [apply(fctm, v[0], v[1]),
-                                       apply(fctm, v[2], v[1]),
-                                       apply(fctm, v[0], v[3]),
-                                       apply(fctm, v[2], v[3])]
+                            corners = [
+                                apply(fctm, v[0], v[1]),
+                                apply(fctm, v[2], v[1]),
+                                apply(fctm, v[0], v[3]),
+                                apply(fctm, v[2], v[3]),
+                            ]
                             xs = [c[0] for c in corners]
                             ys = [c[1] for c in corners]
-                            fclip = intersect(
-                                fclip, (min(xs), min(ys), max(xs), max(ys)))
+                            fclip = intersect(fclip, (min(xs), min(ys), max(xs), max(ys)))
                         except Exception:
                             pass
-                    self.run(xo, xo.get("/Resources") or resources, fctm, fclip,
-                             depth + 1, seen | {key})
+                    self.run(
+                        xo,
+                        xo.get("/Resources") or resources,
+                        fctm,
+                        fclip,
+                        depth + 1,
+                        seen | {key},
+                    )
 
             # Inline images (BI/ID/EI) are bounded by the content stream itself
             # and are left alone.
@@ -218,13 +240,16 @@ def scan_placements(pdf: pikepdf.Pdf) -> dict[tuple, list[Placement]]:
         box = page.get("/CropBox") or page.get("/MediaBox")
         try:
             v = [float(x) for x in box]
-            page_box = (min(v[0], v[2]), min(v[1], v[3]),
-                        max(v[0], v[2]), max(v[1], v[3]))
+            page_box = (
+                min(v[0], v[2]),
+                min(v[1], v[3]),
+                max(v[0], v[2]),
+                max(v[1], v[3]),
+            )
         except Exception:
             page_box = None
         walker = _Walker(page_box)
-        walker.run(page, page.get("/Resources") or pikepdf.Dictionary(),
-                   IDENTITY, None)
+        walker.run(page, page.get("/Resources") or pikepdf.Dictionary(), IDENTITY, None)
         for p in walker.placements:
             by_obj.setdefault(p.objgen, []).append(p)
     return by_obj
@@ -234,8 +259,8 @@ def scan_placements(pdf: pikepdf.Pdf) -> dict[tuple, list[Placement]]:
 class Plan:
     """What to do with one image XObject."""
 
-    crop: tuple[int, int, int, int] | None        # left, top, right, bottom (px)
-    size: tuple[int, int]                         # final pixel size
+    crop: tuple[int, int, int, int] | None  # left, top, right, bottom (px)
+    size: tuple[int, int]  # final pixel size
     uv: tuple[float, float, float, float] | None  # crop in image space, u0 v0 u1 v1
 
     @property
@@ -265,7 +290,7 @@ def plan_image(placements: list[Placement], profile: Profile) -> Plan | None:
     if profile.crop_to_visible:
         for p in placements:
             if not is_axis_aligned(p.ctm):
-                uv = (0.0, 0.0, 1.0, 1.0)   # rotated or skewed: do not crop
+                uv = (0.0, 0.0, 1.0, 1.0)  # rotated or skewed: do not crop
                 break
             box = bbox_of_unit_square(p.ctm)
             vis = intersect(box, p.clip) if p.clip else box
@@ -279,14 +304,13 @@ def plan_image(placements: list[Placement], profile: Profile) -> Plan | None:
             u1 = (vis[2] - box[0]) / w
             v0 = (vis[1] - box[1]) / h
             v1 = (vis[3] - box[1]) / h
-            if p.ctm[0] < 0:                # mirrored horizontally
+            if p.ctm[0] < 0:  # mirrored horizontally
                 u0, u1 = 1 - u1, 1 - u0
-            if p.ctm[3] < 0:                # mirrored vertically
+            if p.ctm[3] < 0:  # mirrored vertically
                 v0, v1 = 1 - v1, 1 - v0
             uv = union(uv, (u0, v0, u1, v1))
         if uv is not None:
-            uv = (max(0.0, uv[0]), max(0.0, uv[1]),
-                  min(1.0, uv[2]), min(1.0, uv[3]))
+            uv = (max(0.0, uv[0]), max(0.0, uv[1]), min(1.0, uv[2]), min(1.0, uv[3]))
 
     # A crop that saves under 0.1% on both axes is not worth the rewrite.
     if uv is not None and uv[2] - uv[0] >= 0.999 and uv[3] - uv[1] >= 0.999:
@@ -315,8 +339,8 @@ def plan_image(placements: list[Placement], profile: Profile) -> Plan | None:
         w_pt = math.hypot(p.ctm[0], p.ctm[1])
         h_pt = math.hypot(p.ctm[2], p.ctm[3])
         if uv is not None:
-            w_pt *= (uv[2] - uv[0])
-            h_pt *= (uv[3] - uv[1])
+            w_pt *= uv[2] - uv[0]
+            h_pt *= uv[3] - uv[1]
         if w_pt > 0:
             dpi_x = max(dpi_x, cw / (w_pt / 72.0))
         if h_pt > 0:

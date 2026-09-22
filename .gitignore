@@ -9,3 +9,10 @@ venv/
 .ruff_cache/
 .coverage
 htmlcov/
+dist/
+.python-version
+
+# Reference decks are real customer documents. Keep them out of the index by
+# default; add deliberately with `git add -f` if one ever needs committing.
+examples/
+*.optimized.pdf

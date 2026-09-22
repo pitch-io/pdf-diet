@@ -8,7 +8,7 @@ import pikepdf
 import pytest
 
 from conftest import PAGE_H, PAGE_W
-from pdfoptimize.geometry import (
+from pdfdiet.geometry import (
     IDENTITY,
     Placement,
     apply,
@@ -20,7 +20,7 @@ from pdfoptimize.geometry import (
     scan_placements,
     union,
 )
-from pdfoptimize.profiles import MinimalFileSize, Web
+from pdfdiet.profiles import MinimalFileSize, Web
 
 
 class TestMatrices:
@@ -38,7 +38,7 @@ class TestMatrices:
 
     def test_axis_alignment_detection(self):
         assert is_axis_aligned((1, 0, 0, 1, 0, 0))
-        assert is_axis_aligned((-3, 0, 0, 2, 4, 4))     # mirrored is still aligned
+        assert is_axis_aligned((-3, 0, 0, 2, 4, 4))  # mirrored is still aligned
         assert not is_axis_aligned((0, 1, -1, 0, 0, 0))  # 90 degree rotation
 
     def test_unit_square_bbox(self):
@@ -59,8 +59,9 @@ class TestBoxes:
 
 
 def _placement(px, w_pt, h_pt, clip=None):
-    return Placement(objgen=(1, 0), ctm=(w_pt, 0.0, 0.0, h_pt, 0.0, 0.0),
-                     clip=clip, px=px)
+    return Placement(
+        objgen=(1, 0), ctm=(w_pt, 0.0, 0.0, h_pt, 0.0, 0.0), clip=clip, px=px
+    )
 
 
 class TestPlanner:
@@ -97,7 +98,7 @@ class TestPlanner:
 
     def test_worst_case_dpi_across_placements_wins(self):
         """An image drawn twice must keep enough pixels for the larger use."""
-        small = _placement((800, 450), 72.0, 40.5)      # 800 DPI
+        small = _placement((800, 450), 72.0, 40.5)  # 800 DPI
         large = _placement((800, 450), PAGE_W, PAGE_H)  # 80 DPI
         plan = plan_image([small, large], Web())
         by_small_only = plan_image([small], Web())
@@ -112,8 +113,12 @@ class TestPlanner:
         assert bottom - top == 450
 
     def test_rotated_images_are_not_cropped(self):
-        rotated = Placement(objgen=(1, 0), ctm=(0.0, 300.0, -300.0, 0.0, 0.0, 0.0),
-                            clip=(0.0, 0.0, 50.0, 50.0), px=(800, 450))
+        rotated = Placement(
+            objgen=(1, 0),
+            ctm=(0.0, 300.0, -300.0, 0.0, 0.0, 0.0),
+            clip=(0.0, 0.0, 50.0, 50.0),
+            px=(800, 450),
+        )
         plan = plan_image([rotated], Web())
         assert plan.crop is None
 

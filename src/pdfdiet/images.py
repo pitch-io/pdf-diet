@@ -20,8 +20,16 @@ from PIL import Image, ImageChops, ImageFile, ImageFilter, ImageStat
 from .profiles import Profile
 
 __all__ = [
-    "flate", "psnr", "detail", "psnr_floor", "normalize_mode", "load_pil",
-    "encode_candidates", "reduce_complexity", "set_image", "ENCODABLE_MODES",
+    "flate",
+    "psnr",
+    "detail",
+    "psnr_floor",
+    "normalize_mode",
+    "load_pil",
+    "encode_candidates",
+    "reduce_complexity",
+    "set_image",
+    "ENCODABLE_MODES",
     "PSNR_FLOOR_CEILING",
 ]
 
@@ -54,6 +62,7 @@ def flate(data: bytes) -> bytes:
 # Quality measurement
 # --------------------------------------------------------------------------
 
+
 def psnr(ref: Image.Image, got: Image.Image) -> float:
     """Peak signal-to-noise ratio in dB. 99.0 means identical."""
     a, b = ref.convert("RGB"), got.convert("RGB")
@@ -79,7 +88,8 @@ def detail(im: Image.Image) -> float:
     """
     g = im.convert("L")
     return ImageStat.Stat(
-        ImageChops.difference(g, g.filter(ImageFilter.GaussianBlur(2)))).mean[0]
+        ImageChops.difference(g, g.filter(ImageFilter.GaussianBlur(2)))
+    ).mean[0]
 
 
 #: Absolute ceiling on the per-image quality floor, in dB.
@@ -114,6 +124,7 @@ def psnr_floor(profile: Profile, im: Image.Image) -> float:
 # --------------------------------------------------------------------------
 # Decoding
 # --------------------------------------------------------------------------
+
 
 def normalize_mode(im: Image.Image) -> Image.Image:
     """Coerce a decoded image into a mode we can faithfully write to PDF.
@@ -176,6 +187,7 @@ def reduce_complexity(im: Image.Image) -> Image.Image:
 # Encoding
 # --------------------------------------------------------------------------
 
+
 def _encode_jpeg(im: Image.Image, q: int, profile: Profile) -> bytes:
     """Encode as JPEG, falling back if Pillow's optimiser cannot fit the scan.
 
@@ -188,9 +200,14 @@ def _encode_jpeg(im: Image.Image, q: int, profile: Profile) -> bytes:
     for optimize in (True, False):
         buf = io.BytesIO()
         try:
-            im.save(buf, format="JPEG", quality=q, optimize=optimize,
-                    progressive=profile.progressive_jpeg,
-                    subsampling=(0 if q >= 90 else 2))
+            im.save(
+                buf,
+                format="JPEG",
+                quality=q,
+                optimize=optimize,
+                progressive=profile.progressive_jpeg,
+                subsampling=(0 if q >= 90 else 2),
+            )
             return buf.getvalue()
         except OSError as exc:
             last = exc
@@ -199,8 +216,13 @@ def _encode_jpeg(im: Image.Image, q: int, profile: Profile) -> bytes:
 
 def _encode_jp2(im: Image.Image, db: int) -> bytes:
     buf = io.BytesIO()
-    im.save(buf, format="JPEG2000", quality_mode="dB",
-            quality_layers=[float(db)], irreversible=True)
+    im.save(
+        buf,
+        format="JPEG2000",
+        quality_mode="dB",
+        quality_layers=[float(db)],
+        irreversible=True,
+    )
     return buf.getvalue()
 
 
@@ -221,8 +243,9 @@ def _shape_ok(data: bytes, im: Image.Image, cs: str) -> Image.Image | None:
     return dec if len(dec.getbands()) == want else None
 
 
-def _search_codec(encode, lo: int, hi: int, im: Image.Image, cs: str,
-                  floor: float) -> tuple[int, bytes] | None:
+def _search_codec(
+    encode, lo: int, hi: int, im: Image.Image, cs: str, floor: float
+) -> tuple[int, bytes] | None:
     """Cheapest quality setting in [lo, hi] whose decode clears ``floor`` dB.
 
     Both codecs are monotonic in their quality knob, so a binary search finds
@@ -276,48 +299,68 @@ def encode_candidates(im: Image.Image, profile: Profile) -> list[tuple[int, dict
 
     if im.mode == "1":
         raw = flate(im.tobytes())
-        return [(len(raw), {"data": raw, "filter": "/FlateDecode",
-                            "cs": "/DeviceGray", "bpc": 1})]
+        return [
+            (
+                len(raw),
+                {"data": raw, "filter": "/FlateDecode", "cs": "/DeviceGray", "bpc": 1},
+            )
+        ]
 
     if im.mode == "P":
         raw = flate(im.tobytes())
         palette = im.getpalette() or []
         ncol = max(1, len(palette) // 3)
-        return [(len(raw), {"data": raw, "filter": "/FlateDecode",
-                            "cs": ("indexed", bytes(palette[:ncol * 3]), ncol - 1),
-                            "bpc": 8})]
+        return [
+            (
+                len(raw),
+                {
+                    "data": raw,
+                    "filter": "/FlateDecode",
+                    "cs": ("indexed", bytes(palette[: ncol * 3]), ncol - 1),
+                    "bpc": 8,
+                },
+            )
+        ]
 
     cs = "/DeviceGray" if im.mode == "L" else "/DeviceRGB"
     floor = psnr_floor(profile, im)
 
     raw = flate(im.tobytes())
     out: list[tuple[int, dict]] = [
-        (len(raw), {"data": raw, "filter": "/FlateDecode", "cs": cs, "bpc": 8})]
+        (len(raw), {"data": raw, "filter": "/FlateDecode", "cs": cs, "bpc": 8})
+    ]
 
-    hit = _search_codec(lambda q: _encode_jpeg(im, q, profile),
-                        *_JPEG_RANGE, im, cs, floor)
+    hit = _search_codec(
+        lambda q: _encode_jpeg(im, q, profile), *_JPEG_RANGE, im, cs, floor
+    )
     if hit:
-        out.append((hit[0], {"data": hit[1], "filter": "/DCTDecode",
-                             "cs": cs, "bpc": 8}))
+        out.append((hit[0], {"data": hit[1], "filter": "/DCTDecode", "cs": cs, "bpc": 8}))
 
-    hit = _search_codec(lambda db: _encode_jp2(im, db),
-                        *_JP2_RANGE, im, cs, floor)
+    hit = _search_codec(lambda db: _encode_jp2(im, db), *_JP2_RANGE, im, cs, floor)
     if hit:
-        out.append((hit[0], {"data": hit[1], "filter": "/JPXDecode",
-                             "cs": cs, "bpc": 8}))
+        out.append((hit[0], {"data": hit[1], "filter": "/JPXDecode", "cs": cs, "bpc": 8}))
 
     return out
 
 
-def set_image(xobj: pikepdf.Object, pdf: pikepdf.Pdf, spec: dict,
-              size: tuple[int, int]) -> None:
+def set_image(
+    xobj: pikepdf.Object, pdf: pikepdf.Pdf, spec: dict, size: tuple[int, int]
+) -> None:
     """Overwrite an image XObject in place with new pixel data.
 
     Done in place so every existing reference to the object stays valid.
     Stale entries that described the *old* samples are removed first.
     """
-    for key in ("/DecodeParms", "/Decode", "/Interpolate", "/Intent",
-                "/Alternates", "/StructParent", "/OPI", "/Metadata"):
+    for key in (
+        "/DecodeParms",
+        "/Decode",
+        "/Interpolate",
+        "/Intent",
+        "/Alternates",
+        "/StructParent",
+        "/OPI",
+        "/Metadata",
+    ):
         if key in xobj:
             del xobj[key]
 
@@ -332,6 +375,7 @@ def set_image(xobj: pikepdf.Object, pdf: pikepdf.Pdf, spec: dict,
         lut = pdf.make_stream(flate(palette))
         lut.Filter = pikepdf.Name("/FlateDecode")
         xobj.ColorSpace = pikepdf.Array(
-            [pikepdf.Name("/Indexed"), pikepdf.Name("/DeviceRGB"), hival, lut])
+            [pikepdf.Name("/Indexed"), pikepdf.Name("/DeviceRGB"), hival, lut]
+        )
     else:
         xobj.ColorSpace = pikepdf.Name(cs)

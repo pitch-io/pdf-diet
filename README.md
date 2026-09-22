@@ -1,4 +1,4 @@
-# pdfoptimize
+# pdf-diet
 
 PDF compression on a permissively licensed stack — an open-source
 implementation of the Pdftools SDK (3-Heights) `Optimizer.optimizeDocument`
@@ -15,24 +15,24 @@ On the reference deck (an 11-page slide export, 26.4 MB) it produces a file
 ## Install
 
 ```bash
-pip install pdfoptimize            # once published
-pip install -e ".[dev]"            # from a checkout, with tests and lint
+pip install pdf-diet       # once published
+uvx pdf-diet deck.pdf      # or run it without installing anything
 ```
 
-Requires Python 3.10+.
+Requires Python 3.10+. The CLI is `pdf-diet`; the import name is `pdfdiet`.
 
 ## Use
 
 ```bash
-pdfoptimize deck.pdf                          # -> deck.optimized.pdf, Web profile
-pdfoptimize deck.pdf small.pdf -p minimal     # MinimalFileSize
-pdfoptimize deck.pdf small.pdf -q 0.6 -v      # tune quality, report per image
+pdf-diet deck.pdf                          # -> deck.optimized.pdf, Web profile
+pdf-diet deck.pdf small.pdf -p minimal     # MinimalFileSize
+pdf-diet deck.pdf small.pdf -q 0.6 -v      # tune quality, report per image
 ```
 
 ### Command line options
 
 ```
-pdfoptimize [-p PROFILE] [-q 0..1] [-d DPI] [--no-crop] [--progressive] [-v]
+pdf-diet [-p PROFILE] [-q 0..1] [-d DPI] [--no-crop] [--progressive] [-v]
             input [output]
 ```
 
@@ -92,10 +92,10 @@ the better default for sharing: on the reference deck it is 36% smaller than
 ### Python API
 
 ```python
-import pdfoptimize
+import pdfdiet
 
-result = pdfoptimize.optimize_document("deck.pdf", "small.pdf",
-                                       pdfoptimize.MinimalFileSize())
+result = pdfdiet.optimize_document("deck.pdf", "small.pdf",
+                                       pdfdiet.MinimalFileSize())
 print(result)          # deck.pdf: 26.41 MB -> small.pdf: 0.88 MB (30.0x smaller)
 print(result.ratio)    # 30.03
 for img in result.images:
@@ -110,7 +110,7 @@ Profiles are plain dataclasses, so every field is settable — including
 several with no command-line equivalent:
 
 ```python
-profile = pdfoptimize.Web()
+profile = pdfdiet.Web()
 profile.resolution_dpi = 96          # or None to disable downsampling entirely
 profile.threshold_ratio = 1.0        # downsample as soon as over target
 profile.compression_quality = 0.6
@@ -250,10 +250,22 @@ This is not legal advice; confirm against your own obligations.
 
 ## Development
 
+The project is managed with [uv](https://docs.astral.sh/uv/). `uv.lock` is
+committed, so everyone and CI resolve to the same versions.
+
 ```bash
-pip install -e ".[dev]"
-pytest                    # ~30s, no external fixtures
-ruff check src tests tools
+uv sync                          # create .venv from the lockfile
+uv run pytest                    # ~30s, no external fixtures
+uv run ruff check src tests tools
+uv run ruff format src tests tools
+uv build                         # sdist + wheel into dist/
+```
+
+Without uv, dev dependencies live in a [PEP 735](https://peps.python.org/pep-0735/)
+group rather than an extra, so it is `--group`, not `[dev]`:
+
+```bash
+pip install -e . --group dev     # needs pip 25.1+
 ```
 
 To compare against another optimizer's output over a corpus:

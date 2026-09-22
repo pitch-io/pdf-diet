@@ -1,0 +1,37 @@
+name: Publish
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - run: uv build
+      - run: uvx twine check --strict dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pdf-diet
+    permissions:
+      # Required for Trusted Publishing: PyPI accepts a short-lived OIDC token
+      # minted by this workflow instead of a stored API token. Configure the
+      # publisher at https://pypi.org/manage/project/pdf-diet/settings/publishing/
+      # Sigstore attestations are generated and uploaded automatically.
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - uses: pypa/gh-action-pypi-publish@release/v1
