@@ -1,284 +1,271 @@
 # pdf-diet
 
-PDF compression on a permissively licensed stack — an open-source
-implementation of the Pdftools SDK (3-Heights) `Optimizer.optimizeDocument`
-call, covering the **Web** and **MinimalFileSize** profiles.
+`pdf-diet` makes PDFs smaller by cropping and resampling images, choosing a
+suitable image codec, and removing objects that are no longer needed. It is an
+open-source implementation of the Web and MinimalFileSize profiles from the
+Pdftools SDK (formerly 3-Heights).
 
-Built on [pikepdf](https://github.com/pikepdf/pikepdf) (MPL-2.0),
-[Pillow](https://github.com/python-pillow/Pillow) (MIT-CMU) and
-[qpdf](https://github.com/qpdf/qpdf) (Apache-2.0).
-**No Ghostscript, no MuPDF, nothing AGPL** — see [Licensing](#licensing).
+The project uses [pikepdf](https://github.com/pikepdf/pikepdf),
+[Pillow](https://github.com/python-pillow/Pillow), and
+[qpdf](https://github.com/qpdf/qpdf). It does not depend on Ghostscript or
+MuPDF, so the full stack is available under permissive or weak-copyleft
+licences. See [Licensing](#licensing) for the details.
 
-On the reference deck (an 11-page slide export, 26.4 MB) it produces a file
-**9.6% smaller than the commercial tool at measurably higher fidelity**.
+On the slide deck used during development, the `minimal` profile reduced a
+26.4 MB file to 0.88 MB. That was a little smaller than the result from the
+commercial tool's Web profile, while retaining slightly more image detail.
+Your results will depend on what is in the PDF; documents dominated by large,
+lossless images tend to benefit most.
 
-## Install
+## Installation
+
+`pdf-diet` requires Python 3.10 or later. Once the package is published, it
+will be installable with pip:
 
 ```bash
-pip install pdf-diet       # once published
-uvx pdf-diet deck.pdf      # or run it without installing anything
+pip install pdf-diet
 ```
 
-Requires Python 3.10+. The CLI is `pdf-diet`; the import name is `pdfdiet`.
-
-## Use
+Or with uv, without installing it permanently:
 
 ```bash
-pdf-diet deck.pdf                          # -> deck.optimized.pdf, Web profile
-pdf-diet deck.pdf small.pdf -p minimal     # MinimalFileSize
-pdf-diet deck.pdf small.pdf -q 0.6 -v      # tune quality, report per image
+uvx pdf-diet deck.pdf
 ```
 
-### Command line options
+The command-line program is called `pdf-diet`; the Python package is
+`pdfdiet`.
 
+## Command-line usage
+
+The simplest invocation uses the Web profile and writes
+`deck.optimized.pdf`:
+
+```bash
+pdf-diet deck.pdf
 ```
+
+To choose the smaller profile or provide an explicit output path:
+
+```bash
+pdf-diet deck.pdf small.pdf --profile minimal
+```
+
+You can also override the profile's quality and resolution settings:
+
+```bash
+pdf-diet deck.pdf small.pdf --quality 0.6 --dpi 96 --verbose
+```
+
+The complete command is:
+
+```text
 pdf-diet [-p PROFILE] [-q 0..1] [-d DPI] [--no-crop] [--progressive] [-v]
-            input [output]
+         input [output]
 ```
 
-| Option | Default | What it does |
+| Option | Default | Description |
 |---|---|---|
-| `input` | — | The PDF to compress. Left untouched. |
-| `output` | `<input>.optimized.pdf` | Where to write. Overwritten if it exists. |
-| `-p`, `--profile` | `web` | `web` or `minimal`. See the profile table below. |
-| `-q`, `--quality` | profile's | Fidelity, 0–1. Raises or lowers the quality floor every image must meet. |
-| `-d`, `--dpi` | profile's | Target resolution for downsampling. Images stay untouched until they exceed 1.4× this. |
-| `--no-crop` | off | Leave clipped images at full size instead of cropping to the visible region. |
-| `--progressive` | off | Progressive JPEG: ~4% smaller, pixel-identical, but outside PDF's baseline-JPEG wording. |
-| `-v`, `--verbose` | off | Print a line per image plus the deduplication count. |
-| `--version` | — | Print the version and exit. |
+| `input` | required | PDF to compress. The input file is not modified. |
+| `output` | `<input>.optimized.pdf` | Output path. An existing file at this path is overwritten. |
+| `-p`, `--profile` | `web` | Either `web` or `minimal`. |
+| `-q`, `--quality` | profile setting | Quality from 0 to 1. Lower values allow more image distortion in exchange for smaller files. |
+| `-d`, `--dpi` | profile setting | Target resolution for downsampling. |
+| `--no-crop` | off | Do not crop images to their visible area. |
+| `--progressive` | off | Write progressive JPEGs. This usually saves a few percent, but is not covered by PDF's baseline-JPEG wording. |
+| `-v`, `--verbose` | off | Report what happened to each image. |
+| `--version` | — | Print the installed version. |
 
-Exit codes: `0` success, `1` optimization failed, `2` bad arguments or missing
-input.
+The process exits with status 0 on success, 1 if optimization fails, and 2
+for invalid arguments or a missing input file.
 
-**`--quality`** is the main dial. It does not map to a JPEG quality number —
-it sets how much distortion each image may carry, and the encoder searches
-for the cheapest settings that stay within it. Lower values give smaller
-files; 0.5–0.6 is noticeably lossy but usually still presentable, and the
-default 0.8 is conservative. Because the floor adapts per image, lowering
-this affects photographs far more than flat graphics, which is usually what
-you want.
+### Quality and resolution
 
-**`--dpi`** controls resolution rather than fidelity. Reach for it when the
-output will be viewed at a known size — 96 for screen-only sharing, 72 for
-thumbnails. It is often a bigger win than `--quality` on documents built from
-oversized source images, and it costs nothing on documents that were already
-sized correctly, since anything under the threshold is left alone.
+`--quality` is not passed straight through as a JPEG quality value. It sets a
+fidelity target, and `pdf-diet` searches for the smallest encoding that meets
+that target for each image. The default of 0.8 is deliberately conservative.
+Values around 0.5–0.6 are visibly lossy, though they may be acceptable for a
+file intended only for quick sharing.
 
-**`--no-crop`** exists as an escape hatch. Cropping rewrites placement
-matrices, and while that is well covered by tests, this turns the whole
-mechanism off if you hit a document it mishandles. It costs size on
-documents with clipped images (slide exports especially) and nothing on
-documents without them.
+`--dpi` controls image dimensions rather than compression artifacts. Images
+are downsampled only when their effective resolution is more than 1.4 times
+the target, so a 150 DPI profile starts resampling above 210 DPI. For PDFs
+that will only be viewed on screen, 96 DPI is often a useful starting point.
 
-**`-v`** is the first thing to try when a file does not shrink as expected.
-It shows each image's source and output dimensions, the codec chosen and the
-bytes saved, so you can see whether the limit was resolution, quality, or an
-image that was already well compressed.
+If a PDF does not shrink as much as expected, try `--verbose`. The report
+shows the original and output dimensions, codec, and number of bytes saved
+for each image.
 
 ### Profiles
 
-| | `web` | `minimal` |
-|---|---|---|
+| Setting | `web` | `minimal` |
+|---|---:|---:|
 | Target resolution | 150 DPI | 130 DPI |
-| Downsample threshold | 210 DPI | 182 DPI |
+| Downsample above | 210 DPI | 182 DPI |
 | Quality | 0.80 | 0.75 |
-| Removes output intents | no | yes |
+| Remove output intents | no | yes |
 
-Both crop to the visible region and reduce colour complexity. `minimal` is
-the better default for sharing: on the reference deck it is 36% smaller than
-`web` with no visible difference.
+Both profiles crop images to their visible area and reduce colour complexity
+where possible. The `minimal` profile is intended for cases where file size
+matters more than preserving every bit of image fidelity.
 
-### Python API
+## Python API
 
 ```python
 import pdfdiet
 
-result = pdfdiet.optimize_document("deck.pdf", "small.pdf",
-                                       pdfdiet.MinimalFileSize())
-print(result)          # deck.pdf: 26.41 MB -> small.pdf: 0.88 MB (30.0x smaller)
-print(result.ratio)    # 30.03
-for img in result.images:
-    print(img.source_px, "->", img.result_px, img.filter)
+result = pdfdiet.optimize_document(
+    "deck.pdf",
+    "small.pdf",
+    pdfdiet.MinimalFileSize(),
+)
+
+print(result)
+print(result.ratio)
+
+for image in result.images:
+    print(image.source_px, "->", image.result_px, image.filter)
 ```
 
-`Result` carries `before_bytes`, `after_bytes`, `ratio`, `saved_fraction`,
-`merged_objects` and a list of `ImageResult` (`source_px`, `result_px`,
-`before_bytes`, `after_bytes`, `filter`, `cropped`).
+The returned `Result` contains `before_bytes`, `after_bytes`, `ratio`,
+`saved_fraction`, `merged_objects`, and a list of `ImageResult` values. Each
+image result records its source and output dimensions, byte counts, chosen
+filter, and whether it was cropped.
 
-Profiles are plain dataclasses, so every field is settable — including
-several with no command-line equivalent:
+Profiles are dataclasses, so settings can be changed directly:
 
 ```python
 profile = pdfdiet.Web()
-profile.resolution_dpi = 96          # or None to disable downsampling entirely
-profile.threshold_ratio = 1.0        # downsample as soon as over target
+profile.resolution_dpi = 96
+profile.threshold_ratio = 1.0
 profile.compression_quality = 0.6
 profile.crop_to_visible = False
-profile.reduce_color_complexity = False   # keep RGB even where greyscale suffices
+profile.reduce_color_complexity = False
 profile.progressive_jpeg = True
-profile.removal.remove_structure_tree = False   # keep tagging for accessibility
+
+# Keep the document's accessibility structure.
+profile.removal.remove_structure_tree = False
 ```
 
-| Field | Default (Web) | Notes |
-|---|---|---|
-| `resolution_dpi` | `150.0` | `None` disables downsampling; images are still recompressed. |
-| `threshold_ratio` | `1.4` | Multiplier on the target giving the downsample threshold. The SDK's value; lowering it resamples more images, which always costs some sharpness. |
-| `compression_quality` | `0.8` | 0–1, drives the per-image quality floor. |
-| `reduce_color_complexity` | `True` | Collapse RGB to grey to bitonal where the pixels allow, and simplify soft masks. |
-| `crop_to_visible` | `True` | Crop to the clipped region and rewrite placement matrices. |
-| `progressive_jpeg` | `False` | See `--progressive`. |
-| `removal` | `RemovalOptions()` | Which parts of the object graph to discard. |
+Set `resolution_dpi` to `None` to disable downsampling. Images may still be
+recompressed. `RemovalOptions` also controls removal of alternate images,
+article threads, metadata, output intents, piece information, structure trees,
+and thumbnails. The defaults match the corresponding Pdftools profiles.
 
-`RemovalOptions` fields — `remove_alternate_images`, `remove_article_threads`,
-`remove_metadata`, `remove_output_intents`, `remove_piece_info`,
-`remove_structure_tree`, `remove_thumbnails` — mirror the SDK's, and the
-defaults match its Web profile. Set `remove_structure_tree = False` if the
-document's accessibility tagging matters; it is discarded by default because
-both stock profiles prioritise size.
+Both stock profiles remove the structure tree to save space. If accessible
+tagging matters for your document, set `remove_structure_tree` to `False` as
+shown above.
 
-## What it does
+## How it works
 
-1. Walks every content stream tracking the **CTM and clipping path**, to find
-   where each image XObject actually lands on the page.
-2. **Crops** each image to its visible (clipped) region, rewriting the
-   placement matrix so the page renders identically.
-3. Computes **effective DPI per axis** and downsamples any axis above the
-   threshold (1.4× the target) to the target resolution.
-4. Re-encodes, choosing the smallest encoding **that meets a per-image
-   quality floor**.
-5. Drops fully-opaque soft masks; converts binary soft masks to 1-bit stencils.
-6. Prunes the object graph and **deduplicates byte-identical streams**,
-   iteratively — collapsing forms makes their parents identical in turn.
+An image inside a PDF does not have a resolution on its own; its effective DPI
+depends on how large it is drawn on the page. It may also be partly hidden by
+a clipping path. `pdf-diet` therefore does a little more than simply extract
+and recompress every image:
 
-Steps 1–3 are what separate this from "recompress every image": an image
-XObject carries no resolution of its own, so both the DPI it is drawn at and
-the portion of it that is visible have to be recovered from the content
-stream.
+1. It walks the page content streams, tracking transformations and clipping
+   paths to find where each image is drawn.
+2. It crops images to the portion that is actually visible and adjusts their
+   placement matrices accordingly.
+3. It calculates effective horizontal and vertical DPI and downsamples axes
+   that exceed the profile threshold.
+4. It tries suitable encodings and keeps the smallest one that clears the
+   image's quality target.
+5. It removes redundant soft masks, prunes unused objects, and deduplicates
+   identical streams.
 
-## Measured against pdf-tools
+The quality target adapts to the image. Photographs can hide compression
+noise reasonably well, while gradients and flat artwork need a higher signal
+quality to avoid banding. A single fixed PSNR threshold worked poorly for
+both, so the encoder takes local image detail into account.
 
-Reference: an 11-page slide export, 26.41 MB, 8 images (all lossless Flate
-RGB, 99.3% of the file), compared against the same file run through
-pdf-tools' Web profile. The deck is a real customer document and is not in
-the repository.
+## Benchmark notes
 
-**Geometry is an exact match.** The crop and per-axis DPI logic reproduces
-all 8 of pdf-tools' output dimensions exactly, including the non-obvious
-cases:
+The main reference file is an 11-page presentation export containing eight
+large, lossless RGB images. It is a customer document and cannot be included
+in the repository. These are the measurements from the development run:
 
-| Source | Effective DPI | Rule applied | pdf-tools | ours |
-|---|---|---|---|---|
-| 1732×2309 | 208.9 | under 210 threshold — crop only | 921×1470 | **921×1470** |
-| 2485×1204 | 249.3 | over threshold — to 150 DPI | 1339×725 | **1339×725** |
-| 625×625 | 428.6 | over threshold, non-square clip | 219×153 | **219×153** |
-| 2665×1498 | 133.2 | under threshold — untouched | 2665×1498 | **2665×1498** |
+| Output | Size | Compression ratio | Image pages | Text pages |
+|---|---:|---:|---:|---:|
+| Pdftools Web | 973,186 bytes | 27.1× | 39.46 dB | 56.43 dB |
+| pdf-diet Web | 1,369,277 bytes | 19.3× | 41.84 dB | 99.00 dB |
+| pdf-diet MinimalFileSize | 879,517 bytes | 30.0× | 40.90 dB | 99.00 dB |
 
-**Size and fidelity** (PSNR against the original render at 50 DPI, split by
-page type):
+Fidelity was measured as PSNR against a 50 DPI render of the original. A
+reported value of 99 dB means the render was identical. Pages without images
+are left unchanged.
 
-| | bytes | ratio | image pages | text pages |
-|---|---|---|---|---|
-| pdf-tools Web | 973,186 | 27.1× | 39.46 dB | 56.43 dB |
-| ours, Web | 1,369,277 | 19.3× | 41.84 dB | **99.00 dB** |
-| **ours, MinimalFileSize** | **879,517** | **30.0×** | **40.90 dB** | **99.00 dB** |
-
-99.00 dB means bit-identical. Pages without images are passed through
-untouched, which pdf-tools does not do.
-
-## Choosing a codec: why "smallest wins" is wrong
-
-The obvious reading of the SDK's BALANCED strategy — encode several ways,
-keep the smallest — is a trap, and it caused a shipped rendering bug.
-
-JPEG 2000 at a low rate wins on bytes by a mile while looking visibly worse:
-
-```
-2665×1498 gradient:  JP2 44 dB   1,286 bytes   43.45 dB   <- mottled
-                     JP2 56 dB  14,033 bytes   53.13 dB   <- clean
-                     (pdf-tools spent 14,970 bytes)
-```
-
-A fixed PSNR threshold does not fix it either, because **how much fidelity an
-image needs depends on the image**. A photograph hides quantisation error in
-its texture and looks fine at ~35 dB; a flat gradient shows every wavelet
-ripple as banding and needs north of 50 dB.
-
-So the floor adapts to measured local detail, and each codec is
-binary-searched for the cheapest setting clearing it. Measured detail ranges
-from ~0.06 for a gradient to ~12 for a photograph, giving floors of ~53 dB
-and ~36 dB respectively.
-
-## Licensing
-
-This project is licensed under the **Apache License 2.0** — see
-[LICENSE](LICENSE) and [NOTICE](NOTICE).
-
-Dependency licences, which drove the whole design:
-
-| | Licence | |
-|---|---|---|
-| pikepdf | MPL-2.0 | file-level copyleft; fine for proprietary use |
-| qpdf | Apache-2.0 | |
-| Pillow | MIT-CMU | |
-| OpenJPEG | BSD-2-Clause | JPEG 2000, via Pillow |
-| libjpeg-turbo | BSD-3-Clause / IJG | JPEG, via Pillow |
-
-**Deliberately excluded:** Ghostscript, MuPDF, PyMuPDF and pdfsizeopt are all
-AGPL. Artifex states that the AGPL "prohibits the deployment of AGPL software
-in a SaaS environment unless all of the software on the server is also
-released under the AGPL", so using any of them server-side requires a
-commercial licence. That constraint is the reason this project exists.
-
-This is not legal advice; confirm against your own obligations.
+The crop and per-axis DPI calculations produced the same image dimensions as
+Pdftools for all eight images in this file. This is useful regression data,
+but it should not be read as a general promise that the two implementations
+will make identical choices for every PDF.
 
 ## Limitations
 
-- Rotated or skewed images are downsampled but not cropped.
-- Clip paths are tracked as **axis-aligned bounding boxes**. Conservative —
-  visible pixels are never cropped away — but slack remains on
-  non-rectangular clips.
-- Inline images (`BI`/`ID`/`EI`) are left alone.
-- No MRC profile and no font subsetting.
-- JPEG 2000 quality comes from OpenJPEG, which is weaker than the
-  Kakadu-class encoder pdf-tools uses. **mozjpeg** (BSD-3-Clause) is the
-  obvious next lever for closing the remaining gap on photographs; it is not
-  wired up.
-- `--progressive` gives ~4% smaller output with pixel-identical results, but
-  progressive JPEG sits outside PDF's "baseline JPEG" wording for DCTDecode.
-  Modern viewers handle it; it is opt-in rather than default.
+- Rotated and skewed images are downsampled but are not cropped.
+- Clip paths are treated as axis-aligned bounding boxes. This is conservative:
+  it may keep a little extra data, but should not remove visible pixels.
+- Inline images (`BI`/`ID`/`EI`) are not changed.
+- There is no MRC profile or font subsetting.
+- JPEG 2000 encoding is provided by OpenJPEG. It does not compress photographs
+  as efficiently as the commercial encoder used by Pdftools in our tests.
+- Progressive JPEGs work in modern PDF viewers, but are opt-in because the PDF
+  specification describes `DCTDecode` in terms of baseline JPEG.
+
+Cropping involves rewriting image placement matrices. It is covered by the
+test suite, but PDFs are varied and occasionally surprising. If you encounter
+a bad crop, `--no-crop` provides a quick workaround; please also open an issue
+with a reproducible example if you can share one.
+
+## Licensing
+
+`pdf-diet` is licensed under the [Apache License 2.0](LICENSE). The main
+runtime components use the following licences:
+
+| Component | Licence |
+|---|---|
+| pikepdf | MPL-2.0 |
+| qpdf | Apache-2.0 |
+| Pillow | MIT-CMU |
+| OpenJPEG (through Pillow) | BSD-2-Clause |
+| libjpeg-turbo (through Pillow) | BSD-3-Clause / IJG |
+
+Ghostscript, MuPDF, PyMuPDF, and pdfsizeopt are deliberately not used because
+their AGPL licensing is not a good fit for this project, particularly for
+server-side use. This is an engineering constraint, not legal advice; check
+the licence terms against your own requirements.
+
+See [NOTICE](NOTICE) for the full attribution notice.
 
 ## Development
 
-The project is managed with [uv](https://docs.astral.sh/uv/). `uv.lock` is
-committed, so everyone and CI resolve to the same versions.
+The repository uses [uv](https://docs.astral.sh/uv/) and includes a lockfile.
 
 ```bash
-uv sync                          # create .venv from the lockfile
-uv run pytest                    # ~30s, no external fixtures
+uv sync
+uv run pytest
 uv run ruff check src tests tools
 uv run ruff format src tests tools
-uv build                         # sdist + wheel into dist/
+uv build
 ```
 
-Without uv, dev dependencies live in a [PEP 735](https://peps.python.org/pep-0735/)
-group rather than an extra, so it is `--group`, not `[dev]`:
+Without uv, pip 25.1 or later can install the PEP 735 development dependency
+group:
 
 ```bash
-pip install -e . --group dev     # needs pip 25.1+
+pip install -e . --group dev
 ```
 
-To compare against another optimizer's output over a corpus:
+The benchmark helper compares optimizer output across a directory of test
+files:
 
 ```bash
 tools/benchmark.py examples/pdf-compare --render --csv results.csv
 ```
 
-It expects triples of `<name>.uncompressed.pdf`, `<name>.new.pdf` and
-`<name>.new-0.8.pdf`, and reports size and visual fidelity per deck plus
-aggregates. `--render` needs `pdftoppm` from poppler-utils; it is used for
-measurement only and is not a dependency of the package.
+It expects triples named `<name>.uncompressed.pdf`, `<name>.new.pdf`, and
+`<name>.new-0.8.pdf`. The optional render comparison requires `pdftoppm` from
+Poppler; it is used only for measurement and is not a package dependency.
 
-[CLAUDE.md](CLAUDE.md) documents the architecture, the load-bearing
-invariants, and the three bugs that shipped — read it before changing codec
-selection or the deduplication pass.
+Before changing codec selection or stream deduplication, read
+[CLAUDE.md](CLAUDE.md). It describes the architecture, important invariants,
+and a few non-obvious failure modes found during development.
