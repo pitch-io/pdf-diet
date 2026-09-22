@@ -25,6 +25,31 @@ pdfoptimize in.pdf out.pdf -p minimal -v
 There is no network access needed and no test fixture larger than a few
 hundred KB; every test builds the PDF it needs in `tests/conftest.py`.
 
+### Benchmarking against another optimizer
+
+```bash
+tools/benchmark.py examples/pdf-compare --render -n 5    # quick look
+tools/benchmark.py examples/pdf-compare --render --csv results.csv
+```
+
+Expects triples named `<name>.uncompressed.pdf`, `<name>.new.pdf` (reference
+at quality 0.6) and `<name>.new-0.8.pdf` (at 0.8). Reports size and, with
+`--render`, mean PSNR of each output against the original.
+
+Two things to keep in mind when reading its output:
+
+- **The quality scales are not the same number line.** Ours sets a
+  distortion budget; the reference tool's 0.6 means whatever its SDK means.
+  Compare size/fidelity *pairs*, not settings.
+- **A large positive size delta paired with a PSNR near 99 dB means we
+  declined to compress**, not that we compressed badly. `encode_candidates`
+  returns nothing under the floor, so the image is left alone. Check with
+  `-v` on that deck before concluding anything.
+
+`--render` shells out to `pdftoppm` (poppler, GPL). It is a measurement
+tool run as a separate process, never a dependency of the package, and
+nothing it touches is distributed — the licensing story in README stands.
+
 ## Architecture
 
 ```

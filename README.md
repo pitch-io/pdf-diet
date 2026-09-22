@@ -253,8 +253,19 @@ This is not legal advice; confirm against your own obligations.
 ```bash
 pip install -e ".[dev]"
 pytest                    # ~30s, no external fixtures
-ruff check src tests
+ruff check src tests tools
 ```
+
+To compare against another optimizer's output over a corpus:
+
+```bash
+tools/benchmark.py examples/pdf-compare --render --csv results.csv
+```
+
+It expects triples of `<name>.uncompressed.pdf`, `<name>.new.pdf` and
+`<name>.new-0.8.pdf`, and reports size and visual fidelity per deck plus
+aggregates. `--render` needs `pdftoppm` from poppler-utils; it is used for
+measurement only and is not a dependency of the package.
 
 [CLAUDE.md](CLAUDE.md) documents the architecture, the load-bearing
 invariants, and the three bugs that shipped — read it before changing codec
