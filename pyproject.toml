@@ -1,0 +1,75 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "pdfoptimize"
+version = "1.0.0"
+description = "PDF compression on a permissively licensed stack: an open-source take on pdf-tools optimizeDocument"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
+authors = [{ name = "Pitch Software GmbH" }]
+keywords = ["pdf", "compression", "optimization", "pikepdf", "downsample"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Multimedia :: Graphics :: Graphics Conversion",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+dependencies = [
+    "pikepdf>=8.0",
+    "pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4",
+    "pytest-cov>=4.1",
+    "ruff>=0.5",
+]
+
+[project.scripts]
+pdfoptimize = "pdfoptimize.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/pitch-io/pdfoptimize"
+Issues = "https://github.com/pitch-io/pdfoptimize/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/pdfoptimize"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = [
+    "slow: takes more than a couple of seconds",
+    "reference: needs the reference PDFs, which are not in the repo",
+]
+
+[tool.ruff]
+line-length = 90
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    # The PDF object model throws a wide variety of exceptions from C++;
+    # broad catches around it are deliberate and pervasive.
+    "B904",
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["E501"]
+
+[tool.coverage.run]
+source = ["pdfoptimize"]
+branch = true

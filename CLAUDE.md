@@ -1,0 +1,151 @@
+# Working on pdfoptimize
+
+Orientation for agents and humans. Read the **Hazards** section before
+touching `images.py` or `document.py` — both contain non-obvious code that
+looks wrong until you know what it is defending against.
+
+## What this is
+
+A reimplementation of the Pdftools SDK (3-Heights) `Optimizer.optimizeDocument`
+call, covering the **Web** and **MinimalFileSize** profiles. The constraint
+that shaped every dependency choice: it must be usable in a commercial SaaS,
+so nothing AGPL. That rules out Ghostscript, MuPDF, PyMuPDF and pdfsizeopt,
+which is why this exists at all rather than shelling out to `gs`.
+
+## Commands
+
+```bash
+pip install -e ".[dev]"      # install with test/lint extras
+pytest                       # full suite, ~30s, no external fixtures needed
+pytest -q tests/test_regression.py   # the bugs that shipped once
+ruff check src tests         # lint
+pdfoptimize in.pdf out.pdf -p minimal -v
+```
+
+There is no network access needed and no test fixture larger than a few
+hundred KB; every test builds the PDF it needs in `tests/conftest.py`.
+
+## Architecture
+
+```
+src/pdfoptimize/
+  profiles.py    Profile dataclasses. Defaults come from the published
+                 Pdftools API reference; do not "tidy" the numbers.
+  geometry.py    Content-stream walking. Finds where each image lands
+                 (CTM) and how much of it is visible (clip), then decides
+                 crop + per-axis target size.  -> plan_image()
+  images.py      Decode, measure, re-encode.  -> encode_candidates()
+  document.py    Placement rewriting, object pruning, deduplication.
+  optimizer.py   Orchestration.  -> Optimizer.optimize_document()
+  cli.py         Argument parsing.
+```
+
+Data flow for one image:
+
+```
+scan_placements()  -> every (ctm, clip) an image is drawn under
+plan_image()       -> crop rect + final pixel size
+load_pil()         -> base samples, masks detached
+crop / resize
+encode_candidates()-> all encodings meeting the quality floor
+min(by size)       -> chosen
+set_image()        -> written back in place
+rewrite_placements-> corrective `cm` if it was cropped
+```
+
+## Invariants
+
+These are load-bearing. Tests enforce all of them.
+
+1. **A stream's component count must match its declared `/ColorSpace`.**
+   3 for `/DeviceRGB`, 1 for `/DeviceGray`. `_shape_ok` re-decodes every
+   candidate to check.
+2. **Every lossy candidate must clear `psnr_floor()` for that image.**
+   Never select on size alone.
+3. **Cropping an image requires rewriting its placement matrix.** Crop and
+   `adjust_matrix` must be applied together or the page shifts.
+4. **Downsampling is decided per axis.** A stretched image has different
+   effective DPI horizontally and vertically.
+5. **An image drawn more than once gets the worst-case (highest) DPI** and
+   the union of visible regions.
+6. **Image XObjects are modified in place**, so existing references stay
+   valid. Never replace the object.
+
+## Hazards
+
+Three bugs reached rendered pages. Each one passed a naive check first.
+
+### `as_pil_image()` composites masks into alpha
+
+`pikepdf.PdfImage.as_pil_image()` merges `/SMask` and `/Mask` into an alpha
+channel and returns **RGBA**. Transparency is handled separately here, so
+always decode via `images.load_pil()`, which detaches those entries first and
+restores them after.
+
+What went wrong: RGBA reached the encoder. JPEG refuses RGBA so that
+candidate was silently skipped; JPEG 2000 accepted it and wrote four
+channels; the dictionary still said `/DeviceRGB`. Poppler tolerated it, so
+render-based PSNR checks passed at 44 dB. Other viewers showed grey.
+
+### "Keep the smallest output" bands gradients
+
+The SDK documents its BALANCED strategy as keeping the smallest output.
+Implemented literally, that picks JPEG 2000 at a rate which wins on bytes by
+a mile and mottles every gradient. A full-page gradient went to 1.3 KB at
+43 dB PSNR — a number that looks fine and is not.
+
+**How much distortion an image can absorb depends on the image.** A
+photograph hides quantisation error in texture and looks fine at ~35 dB; a
+flat gradient shows every wavelet ripple and needs north of 50 dB. Hence
+`psnr_floor()` scales with measured local `detail()`. Do not replace it with
+a constant; both a photo-tuned and a gradient-tuned constant were tried and
+each is badly wrong for the other case.
+
+A low-frequency (post-blur) error metric was also tried as a banding
+detector and rejected: it separates good from bad *within* one image but not
+*across* images — a mottled gradient scored 1.58 and an acceptable
+photograph 1.75.
+
+### pikepdf returns native Python scalars
+
+`obj["/Width"]` is a plain `int`, not a `pikepdf.Object`, so it has no
+`.is_indirect`. Use `document._is_ref()`. Getting this wrong threw inside a
+broad `except` and silently disabled deduplication for every image XObject
+(which all carry integer `/Width` and `/Height`) for months without any test
+noticing.
+
+Related: `_repoint` guards **each entry** separately rather than wrapping
+the whole loop, so one awkward value cannot abandon a container half-done.
+
+## Testing notes
+
+- pikepdf objects die with the `Pdf` that owns them. Copy values out inside
+  the `with` block; returning objects gives you `object of type destroyed`.
+- Do not assert on absolute byte sizes. A synthetic perfect gradient
+  legitimately compresses to ~1 KB while clearing its floor; a real one does
+  not. Assert on the invariant (quality floor, channel count), not a
+  threshold someone picked.
+- Rendered-page PSNR is a weak check. It passed for both rendering bugs
+  above. Prefer per-image structural assertions.
+
+## Known limitations
+
+- Rotated/skewed images are downsampled but not cropped.
+- Clip paths are tracked as axis-aligned bounding boxes — conservative, so
+  visible pixels are never cropped away, but slack remains on non-rectangular
+  clips.
+- Inline images (`BI`/`ID`/`EI`) are left alone.
+- No MRC profile, no font subsetting.
+- JPEG 2000 quality comes from OpenJPEG, which is weaker than the
+  Kakadu-class encoder the commercial tool uses. **mozjpeg** (BSD-3-Clause)
+  is the obvious next lever and is not wired up.
+
+## Conventions
+
+- Apache-2.0. Every source file carries the SPDX header.
+- Broad `except Exception` around PDF object access is deliberate: the
+  underlying C++ throws a wide and poorly documented variety. Keep the scope
+  tight — guard the individual access, not a whole loop.
+- Comments explain *why*, especially where code defends against something.
+  Do not delete a comment that names a bug without checking the test that
+  pins it.
