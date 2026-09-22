@@ -27,8 +27,69 @@ Requires Python 3.10+.
 pdfoptimize deck.pdf                          # -> deck.optimized.pdf, Web profile
 pdfoptimize deck.pdf small.pdf -p minimal     # MinimalFileSize
 pdfoptimize deck.pdf small.pdf -q 0.6 -v      # tune quality, report per image
-pdfoptimize --help
 ```
+
+### Command line options
+
+```
+pdfoptimize [-p PROFILE] [-q 0..1] [-d DPI] [--no-crop] [--progressive] [-v]
+            input [output]
+```
+
+| Option | Default | What it does |
+|---|---|---|
+| `input` | — | The PDF to compress. Left untouched. |
+| `output` | `<input>.optimized.pdf` | Where to write. Overwritten if it exists. |
+| `-p`, `--profile` | `web` | `web` or `minimal`. See the profile table below. |
+| `-q`, `--quality` | profile's | Fidelity, 0–1. Raises or lowers the quality floor every image must meet. |
+| `-d`, `--dpi` | profile's | Target resolution for downsampling. Images stay untouched until they exceed 1.4× this. |
+| `--no-crop` | off | Leave clipped images at full size instead of cropping to the visible region. |
+| `--progressive` | off | Progressive JPEG: ~4% smaller, pixel-identical, but outside PDF's baseline-JPEG wording. |
+| `-v`, `--verbose` | off | Print a line per image plus the deduplication count. |
+| `--version` | — | Print the version and exit. |
+
+Exit codes: `0` success, `1` optimization failed, `2` bad arguments or missing
+input.
+
+**`--quality`** is the main dial. It does not map to a JPEG quality number —
+it sets how much distortion each image may carry, and the encoder searches
+for the cheapest settings that stay within it. Lower values give smaller
+files; 0.5–0.6 is noticeably lossy but usually still presentable, and the
+default 0.8 is conservative. Because the floor adapts per image, lowering
+this affects photographs far more than flat graphics, which is usually what
+you want.
+
+**`--dpi`** controls resolution rather than fidelity. Reach for it when the
+output will be viewed at a known size — 96 for screen-only sharing, 72 for
+thumbnails. It is often a bigger win than `--quality` on documents built from
+oversized source images, and it costs nothing on documents that were already
+sized correctly, since anything under the threshold is left alone.
+
+**`--no-crop`** exists as an escape hatch. Cropping rewrites placement
+matrices, and while that is well covered by tests, this turns the whole
+mechanism off if you hit a document it mishandles. It costs size on
+documents with clipped images (slide exports especially) and nothing on
+documents without them.
+
+**`-v`** is the first thing to try when a file does not shrink as expected.
+It shows each image's source and output dimensions, the codec chosen and the
+bytes saved, so you can see whether the limit was resolution, quality, or an
+image that was already well compressed.
+
+### Profiles
+
+| | `web` | `minimal` |
+|---|---|---|
+| Target resolution | 150 DPI | 130 DPI |
+| Downsample threshold | 210 DPI | 182 DPI |
+| Quality | 0.80 | 0.75 |
+| Removes output intents | no | yes |
+
+Both crop to the visible region and reduce colour complexity. `minimal` is
+the better default for sharing: on the reference deck it is 36% smaller than
+`web` with no visible difference.
+
+### Python API
 
 ```python
 import pdfoptimize
@@ -41,13 +102,40 @@ for img in result.images:
     print(img.source_px, "->", img.result_px, img.filter)
 ```
 
-Profiles are plain dataclasses, so any field can be overridden:
+`Result` carries `before_bytes`, `after_bytes`, `ratio`, `saved_fraction`,
+`merged_objects` and a list of `ImageResult` (`source_px`, `result_px`,
+`before_bytes`, `after_bytes`, `filter`, `cropped`).
+
+Profiles are plain dataclasses, so every field is settable — including
+several with no command-line equivalent:
 
 ```python
 profile = pdfoptimize.Web()
-profile.resolution_dpi = 96        # more aggressive than the 150 default
-profile.crop_to_visible = False    # leave placement matrices alone
+profile.resolution_dpi = 96          # or None to disable downsampling entirely
+profile.threshold_ratio = 1.0        # downsample as soon as over target
+profile.compression_quality = 0.6
+profile.crop_to_visible = False
+profile.reduce_color_complexity = False   # keep RGB even where greyscale suffices
+profile.progressive_jpeg = True
+profile.removal.remove_structure_tree = False   # keep tagging for accessibility
 ```
+
+| Field | Default (Web) | Notes |
+|---|---|---|
+| `resolution_dpi` | `150.0` | `None` disables downsampling; images are still recompressed. |
+| `threshold_ratio` | `1.4` | Multiplier on the target giving the downsample threshold. The SDK's value; lowering it resamples more images, which always costs some sharpness. |
+| `compression_quality` | `0.8` | 0–1, drives the per-image quality floor. |
+| `reduce_color_complexity` | `True` | Collapse RGB to grey to bitonal where the pixels allow, and simplify soft masks. |
+| `crop_to_visible` | `True` | Crop to the clipped region and rewrite placement matrices. |
+| `progressive_jpeg` | `False` | See `--progressive`. |
+| `removal` | `RemovalOptions()` | Which parts of the object graph to discard. |
+
+`RemovalOptions` fields — `remove_alternate_images`, `remove_article_threads`,
+`remove_metadata`, `remove_output_intents`, `remove_piece_info`,
+`remove_structure_tree`, `remove_thumbnails` — mirror the SDK's, and the
+defaults match its Web profile. Set `remove_structure_tree = False` if the
+document's accessibility tagging matters; it is discarded by default because
+both stock profiles prioritise size.
 
 ## What it does
 
@@ -63,12 +151,10 @@ profile.crop_to_visible = False    # leave placement matrices alone
 6. Prunes the object graph and **deduplicates byte-identical streams**,
    iteratively — collapsing forms makes their parents identical in turn.
 
-| | Web | MinimalFileSize |
-|---|---|---|
-| Target resolution | 150 DPI | 130 DPI |
-| Downsample threshold | 210 DPI | 182 DPI |
-| Quality | 0.80 | 0.75 |
-| Removes output intents | no | yes |
+Steps 1–3 are what separate this from "recompress every image": an image
+XObject carries no resolution of its own, so both the DPI it is drawn at and
+the portion of it that is visible have to be recovered from the content
+stream.
 
 ## Measured against pdf-tools
 
