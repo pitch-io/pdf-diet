@@ -118,6 +118,64 @@ def build_pdf(path, items, page_size=(PAGE_W, PAGE_H)) -> str:
     return str(path)
 
 
+def build_vector_pdf(
+    path,
+    pages: int = 1,
+    form: bool = False,
+    soft_mask: bool = False,
+    colour_spaces: dict | None = None,
+    output_intent: pikepdf.Dictionary | None = None,
+) -> str:
+    """Build a PDF that fills a rectangle with DeviceRGB and declares no profile.
+
+    That is the shape Chrome's print-to-PDF emits. ``form`` draws the fill
+    inside a form XObject with its own resources, as Skia does for
+    transparency groups; ``soft_mask`` fades the fill through a luminosity
+    soft mask whose group paints a DeviceRGB ramp, the shape Chrome writes for
+    gradient opacity; ``colour_spaces`` seeds each page's /ColorSpace.
+    """
+    pdf = pikepdf.new()
+    fill = b"0.945 0.525 0 rg 0 0 200 200 re f"
+    for _ in range(pages):
+        page = pdf.add_blank_page(page_size=(PAGE_W, PAGE_H))
+        res = Dictionary()
+        if colour_spaces:
+            res.ColorSpace = Dictionary(colour_spaces)
+        if form:
+            fx = pdf.make_stream(fill)
+            fx.Type = Name.XObject
+            fx.Subtype = Name.Form
+            fx.BBox = [0, 0, PAGE_W, PAGE_H]
+            fx.Resources = Dictionary()
+            res.XObject = Dictionary(Fx0=fx)
+            page.Contents = pdf.make_stream(b"/Fx0 Do")
+        elif soft_mask:
+            group = pdf.make_stream(
+                b"0 0 0 rg 0 0 100 200 re f 1 1 1 rg 100 0 100 200 re f"
+            )
+            group.Type = Name.XObject
+            group.Subtype = Name.Form
+            group.BBox = [0, 0, 200, 200]
+            group.Group = Dictionary(
+                Type=Name.Group, S=Name.Transparency, CS=Name.DeviceRGB
+            )
+            group.Resources = Dictionary()
+            res.ExtGState = Dictionary(
+                GS0=Dictionary(
+                    Type=Name.ExtGState,
+                    SMask=Dictionary(Type=Name.Mask, S=Name.Luminosity, G=group),
+                )
+            )
+            page.Contents = pdf.make_stream(b"q /GS0 gs " + fill + b" Q")
+        else:
+            page.Contents = pdf.make_stream(fill)
+        page.Resources = res
+    if output_intent is not None:
+        pdf.Root.OutputIntents = pikepdf.Array([output_intent])
+    pdf.save(str(path))
+    return str(path)
+
+
 # --------------------------------------------------------------------------
 # Fixtures
 # --------------------------------------------------------------------------
@@ -184,3 +242,9 @@ def mixed_pdf(tmp_path, gradient_src):
             (noisy_image(), (PAGE_W / 3, PAGE_H / 3, 20, 20), None, None),
         ],
     )
+
+
+@pytest.fixture
+def vector_pdf(tmp_path):
+    """One DeviceRGB fill, no colour profile: an untagged Chrome export."""
+    return build_vector_pdf(tmp_path / "vector.pdf")

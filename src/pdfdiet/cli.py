@@ -59,6 +59,12 @@ def build_parser() -> argparse.ArgumentParser:
         "baseline-JPEG wording for DCTDecode",
     )
     ap.add_argument(
+        "--srgb",
+        action="store_true",
+        help="declare the colours as sRGB (output intent + /DefaultRGB), "
+        "for exports that look oversaturated in some viewers",
+    )
+    ap.add_argument(
         "-v", "--verbose", action="store_true", help="report what happens to each image"
     )
     ap.add_argument("--version", action="version", version=f"pdf-diet {__version__}")
@@ -87,6 +93,8 @@ def main(argv: list[str] | None = None) -> int:
         profile.crop_to_visible = False
     if args.progressive:
         profile.progressive_jpeg = True
+    if args.srgb:
+        profile.declare_srgb = True
 
     out = args.output or (os.path.splitext(args.input)[0] + ".optimized.pdf")
 
@@ -97,6 +105,8 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     print(result)
+    if result.srgb_skipped:
+        print(f"pdf-diet: sRGB not declared: {result.srgb_skipped}", file=sys.stderr)
     return 0
 
 

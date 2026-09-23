@@ -59,8 +59,8 @@ pdf-diet deck.pdf small.pdf --quality 0.6 --dpi 96 --verbose
 The complete command is:
 
 ```text
-pdf-diet [-p PROFILE] [-q 0..1] [-d DPI] [--no-crop] [--progressive] [-v]
-         input [output]
+pdf-diet [-p PROFILE] [-q 0..1] [-d DPI] [--no-crop] [--progressive] [--srgb]
+         [-v] input [output]
 ```
 
 | Option | Default | Description |
@@ -72,6 +72,7 @@ pdf-diet [-p PROFILE] [-q 0..1] [-d DPI] [--no-crop] [--progressive] [-v]
 | `-d`, `--dpi` | profile setting | Target resolution for downsampling. |
 | `--no-crop` | off | Do not crop images to their visible area. |
 | `--progressive` | off | Write progressive JPEGs. This usually saves a few percent, but is not covered by PDF's baseline-JPEG wording. |
+| `--srgb` | off | Declare the document's colours as sRGB. See [Colour](#colour). |
 | `-v`, `--verbose` | off | Report what happened to each image. |
 | `--version` | — | Print the installed version. |
 
@@ -107,6 +108,22 @@ for each image.
 Both profiles crop images to their visible area and reduce colour complexity
 where possible. The `minimal` profile is intended for cases where file size
 matters more than preserving every bit of image fidelity.
+
+### Colour
+
+Chrome's print-to-PDF writes every colour as bare `DeviceRGB` and embeds no
+colour profile. Viewers that do not assume sRGB then show the export
+oversaturated on wide-gamut displays. `--srgb` (or `declare_srgb=True` on a
+profile, or `pdfdiet.tag_srgb(pdf)` on an open `pikepdf.Pdf`) embeds one sRGB
+IEC61966-2.1 profile and points an `/OutputIntents` entry and a `/DefaultRGB`
+colour space on every page, form XObject and tiling pattern at it. No pixels
+change.
+
+It is off by default because the Pdftools SDK does not do it. It is applied
+after the profile's removals, so it holds under `minimal` too. A document
+that already declares a different output intent, such as a CMYK PDF/X
+condition, is left undeclared rather than overwritten; the result's
+`srgb_skipped` says why.
 
 ## Python API
 
@@ -228,6 +245,7 @@ runtime components use the following licences:
 | Pillow | MIT-CMU |
 | OpenJPEG (through Pillow) | BSD-2-Clause |
 | libjpeg-turbo (through Pillow) | BSD-3-Clause / IJG |
+| sRGB ICC profile (vendored, ArgyllCMS) | Public domain |
 
 Ghostscript, MuPDF, PyMuPDF, and pdfsizeopt are deliberately not used because
 their AGPL licensing is not a good fit for this project, particularly for

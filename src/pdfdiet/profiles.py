@@ -54,6 +54,11 @@ class Profile:
         progressive_jpeg: ~4% smaller at identical pixels, but progressive
             JPEG sits outside PDF's "baseline JPEG" wording for DCTDecode.
             Opt-in.
+        declare_srgb: Declare the document's DeviceRGB values as sRGB, via an
+            output intent and /DefaultRGB; see ``srgb``. Fixes oversaturated
+            Chrome exports in viewers that do not assume sRGB. Off by default
+            because the Pdftools SDK does not do it, and it is applied after
+            ``removal``, so it holds even under ``remove_output_intents``.
     """
 
     resolution_dpi: float | None = 150.0
@@ -62,6 +67,7 @@ class Profile:
     reduce_color_complexity: bool = True
     crop_to_visible: bool = True
     progressive_jpeg: bool = False
+    declare_srgb: bool = False
     removal: RemovalOptions = field(default_factory=RemovalOptions)
 
     @property

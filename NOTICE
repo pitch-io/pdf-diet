@@ -21,3 +21,13 @@ libjpeg-turbo      BSD 3-Clause / IJG            https://github.com/libjpeg-turb
 
 None of these are copyleft in a way that affects distribution of this
 project, and none are AGPL. See README.md ("Licensing") for the rationale.
+
+----------------------------------------------------------------------
+Vendored data
+----------------------------------------------------------------------
+
+src/pdfdiet/data/sRGB.icc
+    "sRGB IEC61966-2.1 (Equivalent to www.srgb.com 1998 HP profile)",
+    ICC v2.2, from ArgyllCMS by Graeme W. Gill. The profile's own copyright
+    tag reads: "Created by Graeme W. Gill. Released into the public domain.
+    No Warranty, Use at your own risk."

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from .optimizer import ImageResult, Optimizer, Result, optimize_document
 from .profiles import PROFILES, MinimalFileSize, Profile, RemovalOptions, Web
+from .srgb import ForeignOutputIntent, tag_srgb
 
 __version__ = "1.0.0"
 
@@ -30,5 +31,7 @@ __all__ = [
     "MinimalFileSize",
     "RemovalOptions",
     "PROFILES",
+    "tag_srgb",
+    "ForeignOutputIntent",
     "__version__",
 ]

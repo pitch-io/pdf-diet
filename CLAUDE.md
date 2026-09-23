@@ -73,6 +73,8 @@ src/pdfdiet/
                  crop + per-axis target size.  -> plan_image()
   images.py      Decode, measure, re-encode.  -> encode_candidates()
   document.py    Placement rewriting, object pruning, deduplication.
+  srgb.py        Opt-in sRGB declaration: output intent + /DefaultRGB.
+                 Python twin of pitch-app's backend.integration.pdf-srgb.
   optimizer.py   Orchestration.  -> Optimizer.optimize_document()
   cli.py         Argument parsing.
 ```
@@ -109,6 +111,10 @@ These are load-bearing. Tests enforce all of them.
    the union of visible regions.
 6. **Image XObjects are modified in place**, so existing references stay
    valid. Never replace the object.
+7. **The sRGB declaration runs after `prune` and before `dedupe`.** After, so
+   `remove_output_intents` cannot strip the intent just added; before, so the
+   profile merges with an identical copy already in the file. It never
+   overwrites a non-sRGB output intent, and never fails the run.
 
 ## Hazards
 
@@ -183,6 +189,11 @@ the whole loop, so one awkward value cannot abandon a container half-done.
   legitimately compresses to ~1 KB while clearing its floor; a real one does
   not. Assert on the invariant (quality floor, channel count), not a
   threshold someone picked.
+- Parse the output, never search its bytes. pdf-diet writes object streams,
+  so names like `/DefaultRGB` sit inside compressed data and a byte search
+  finds nothing, passing for the wrong reason.
+- qpdf pushes inherited page `/Resources` onto each page when it writes, so a
+  fixture that relies on inheritance must be built in memory, not saved.
 - Rendered-page PSNR is a weak check. It passed for both rendering bugs
   above. Prefer per-image structural assertions.
 
@@ -194,6 +205,14 @@ the whole loop, so one awkward value cannot abandon a container half-done.
   clips.
 - Inline images (`BI`/`ID`/`EI`) are left alone.
 - No MRC profile, no font subsetting.
+- `set_image` writes recompressed images as `/DeviceRGB` even when they were
+  `/ICCBased`, dropping the image's own profile. With `declare_srgb` those
+  images are then read as sRGB. Chrome exports carry no such images.
+- The sRGB declaration does not reach annotation appearance streams or a
+  page's transparency-group `/CS`. Soft-mask groups (`/ExtGState` →
+  `/SMask /G`) are skipped **on purpose**: they produce opacity, not colour.
+  A real deck showing "2/4 forms tagged" is this, not a bug —
+  `test_soft_mask_groups_are_left_alone` pins it.
 - JPEG 2000 quality comes from OpenJPEG, which is weaker than the
   Kakadu-class encoder the commercial tool uses. **mozjpeg** (BSD-3-Clause)
   is the obvious next lever and is not wired up.

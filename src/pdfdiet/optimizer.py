@@ -21,6 +21,7 @@ from .images import (
     set_image,
 )
 from .profiles import Profile, Web
+from .srgb import tag_srgb
 
 __all__ = ["Optimizer", "ImageResult", "Result", "optimize_document"]
 
@@ -48,6 +49,9 @@ class Result:
     after_bytes: int
     images: list[ImageResult] = field(default_factory=list)
     merged_objects: int = 0
+    srgb_tagged: bool = False
+    #: Why ``declare_srgb`` was requested but not applied, else None.
+    srgb_skipped: str | None = None
 
     @property
     def ratio(self) -> float:
@@ -206,6 +210,16 @@ class Optimizer:
 
         rewrite_placements(pdf, adjust)
         prune(pdf, profile.removal)
+        if profile.declare_srgb:
+            # After prune, so remove_output_intents cannot strip the intent
+            # just added; before dedupe, so it merges with an identical
+            # profile already in the file. An undeclared export beats none.
+            try:
+                tag_srgb(pdf)
+                result.srgb_tagged = True
+            except Exception as exc:
+                result.srgb_skipped = str(exc) or type(exc).__name__
+                self._log(f"  sRGB declaration skipped: {result.srgb_skipped}")
         result.merged_objects = dedupe(pdf)
         if result.merged_objects:
             self._log(f"  deduplicated {result.merged_objects} redundant objects")
