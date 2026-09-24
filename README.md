@@ -1,21 +1,11 @@
 # pdf-diet
 
 `pdf-diet` makes PDFs smaller by cropping and resampling images, choosing a
-suitable image codec, and removing objects that are no longer needed. It is an
-open-source implementation of the Web and MinimalFileSize profiles from the
-Pdftools SDK (formerly 3-Heights).
+suitable image codec, and removing objects that are no longer needed.
 
 The project uses [pikepdf](https://github.com/pikepdf/pikepdf),
 [Pillow](https://github.com/python-pillow/Pillow), and
-[qpdf](https://github.com/qpdf/qpdf). It does not depend on Ghostscript or
-MuPDF, so the full stack is available under permissive or weak-copyleft
-licences. See [Licensing](#licensing) for the details.
-
-On the slide deck used during development, the `minimal` profile reduced a
-26.4 MB file to 0.88 MB. That was a little smaller than the result from the
-commercial tool's Web profile, while retaining slightly more image detail.
-Your results will depend on what is in the PDF; documents dominated by large,
-lossless images tend to benefit most.
+[qpdf](https://github.com/qpdf/qpdf).
 
 ## Installation
 
