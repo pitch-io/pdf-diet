@@ -106,7 +106,6 @@ ignore = [
     "PLR0915", # too-many-statements
     "PLR0917", # too-many-positional-arguments
     "PLR2004", # magic-value-comparison: TODO should remove and use constants with sensible names
-    "RUF046",  # unnecessary-cast-to-int: TODO remove after running CI with all instances yanked across the full matrix of supported python versions
     "S110",    # try-except-pass: TODO should remove this and better handle logging with a real logger
     "S112",    # try-except-continue: TODO should remove this and better handle logging with a real logger
 ]

@@ -317,11 +317,11 @@ def plan_image(placements: list[Placement], profile: Profile) -> Plan | None:
         uv = None
 
     if uv is not None:
-        left = max(0, int(math.floor(uv[0] * px_w)))
-        right = min(px_w, int(math.ceil(uv[2] * px_w)))
+        left = max(0, math.floor(uv[0] * px_w))
+        right = min(px_w, math.ceil(uv[2] * px_w))
         # PDF image space puts row 0 at the TOP, so v flips.
-        top = max(0, int(math.floor((1.0 - uv[3]) * px_h)))
-        bottom = min(px_h, int(math.ceil((1.0 - uv[1]) * px_h)))
+        top = max(0, math.floor((1.0 - uv[3]) * px_h))
+        bottom = min(px_h, math.ceil((1.0 - uv[1]) * px_h))
         if right - left < 2 or bottom - top < 2:
             return None
         crop = (left, top, right, bottom)
@@ -351,9 +351,9 @@ def plan_image(placements: list[Placement], profile: Profile) -> Plan | None:
     if target:
         thr = profile.threshold_dpi
         if dpi_x > thr:
-            nw = max(1, int(round(cw * target / dpi_x)))
+            nw = max(1, round(cw * target / dpi_x))
         if dpi_y > thr:
-            nh = max(1, int(round(ch * target / dpi_y)))
+            nh = max(1, round(ch * target / dpi_y))
 
     if crop is None and (nw, nh) == (px_w, px_h):
         return Plan(None, (px_w, px_h), None)
