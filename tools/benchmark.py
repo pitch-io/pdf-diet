@@ -32,8 +32,6 @@ Usage:
     tools/benchmark.py examples/pdf-compare --render --csv results.csv
 """
 
-from __future__ import annotations
-
 import argparse
 import concurrent.futures
 import csv

@@ -7,8 +7,6 @@ them; the failure modes are silent under naive checks (both of these passed a
 PSNR comparison of rendered pages at the time they were broken).
 """
 
-from __future__ import annotations
-
 import io
 import zlib
 

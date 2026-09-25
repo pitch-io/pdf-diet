@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """The top-level optimization pass."""
 
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass, field
 

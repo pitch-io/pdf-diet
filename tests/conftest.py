@@ -7,8 +7,6 @@ document and is not in the repository, so every test builds the smallest PDF
 that exercises the behaviour in question.
 """
 
-from __future__ import annotations
-
 import math
 import random
 import zlib

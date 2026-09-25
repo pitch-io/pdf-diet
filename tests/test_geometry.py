@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Matrix maths, clip tracking and the crop/downsample planner."""
 
-from __future__ import annotations
-
 import pikepdf
 import pytest
 

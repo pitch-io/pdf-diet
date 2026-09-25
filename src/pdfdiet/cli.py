@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Command line interface."""
 
-from __future__ import annotations
-
 import argparse
 import os
 import sys

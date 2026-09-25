@@ -41,8 +41,6 @@ intents. The JDK's profile, which the backend embeds, is GPL-licensed data
 and cannot be shipped here.
 """
 
-from __future__ import annotations
-
 import contextlib
 from importlib import resources
 

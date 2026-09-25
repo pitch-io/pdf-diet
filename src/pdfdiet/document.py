@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Document-level surgery: placement rewriting, pruning, deduplication."""
 
-from __future__ import annotations
-
 import contextlib
 import hashlib
 

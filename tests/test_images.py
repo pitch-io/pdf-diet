@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Decoding, quality assessment and codec selection."""
 
-from __future__ import annotations
-
 import io
 
 import pikepdf

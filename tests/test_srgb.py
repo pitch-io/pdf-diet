@@ -7,8 +7,6 @@ streams, so a byte search for ``/DefaultRGB`` finds nothing and a test built on
 one passes for the wrong reason.
 """
 
-from __future__ import annotations
-
 import pikepdf
 import pytest
 from pikepdf import Dictionary, Name

@@ -9,8 +9,6 @@ under, and the region of it you can actually see depends on the clipping
 path in force at that moment. Both have to come out of the content stream.
 """
 
-from __future__ import annotations
-
 import contextlib
 import math
 from dataclasses import dataclass

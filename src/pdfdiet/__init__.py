@@ -13,8 +13,6 @@ no Ghostscript, no MuPDF, nothing AGPL.
     in.pdf: 26.41 MB -> out.pdf: 0.89 MB (29.7x smaller, 96.6% saved)
 """
 
-from __future__ import annotations
-
 from .optimizer import ImageResult, Optimizer, Result, optimize_document
 from .profiles import PROFILES, MinimalFileSize, Profile, RemovalOptions, Web
 from .srgb import ForeignOutputIntent, tag_srgb

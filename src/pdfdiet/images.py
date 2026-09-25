@@ -7,8 +7,6 @@ before the guards below existed. Read `CLAUDE.md` before changing the codec
 selection logic.
 """
 
-from __future__ import annotations
-
 import contextlib
 import io
 import math

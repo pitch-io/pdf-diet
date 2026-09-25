@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """End-to-end behaviour of the optimizer and CLI."""
 
-from __future__ import annotations
-
 import os
 
 import pikepdf
