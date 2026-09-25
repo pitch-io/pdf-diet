@@ -7,22 +7,24 @@ them; the failure modes are silent under naive checks (both of these passed a
 PSNR comparison of rendered pages at the time they were broken).
 """
 
-from __future__ import annotations
-
+import io
 import zlib
+from pathlib import Path
+from typing import Any
 
 import pikepdf
 import pytest
 from pikepdf import Dictionary, Name
-from PIL import Image
+from PIL import Image, ImageStat
+from pytest import FixtureRequest
 
 from conftest import PAGE_H, PAGE_W, gradient_image
 from pdfdiet import MinimalFileSize, Web, optimize_document
 from pdfdiet.document import dedupe
-from pdfdiet.images import load_pil, psnr, psnr_floor
+from pdfdiet.images import encode_candidates, load_pil, psnr, psnr_floor
 
 
-def _decoded_images(path):
+def _decoded_images(path: Path) -> list[tuple[str, Image.Image, tuple[int, int]]]:
     """Every image in the file, decoded, with its declared colour space."""
     with pikepdf.open(path) as pdf:
         out = []
@@ -32,6 +34,8 @@ def _decoded_images(path):
             if o.get("/Subtype") != pikepdf.Name.Image or o.get("/ImageMask"):
                 continue
             im = load_pil(o)
+            if im is None:
+                raise Exception("Image was none")
             out.append((str(o.get("/ColorSpace")), im, (int(o.Width), int(o.Height))))
         return out
 
@@ -48,7 +52,9 @@ class TestColourSpaceConsistency:
     @pytest.mark.parametrize(
         "fixture", ["gradient_pdf", "smask_pdf", "opaque_smask_pdf", "mixed_pdf"]
     )
-    def test_channels_match_declared_colourspace(self, fixture, request, tmp_path):
+    def test_channels_match_declared_colourspace(
+        self, fixture: str, request: FixtureRequest, tmp_path: Path
+    ) -> None:
         src = request.getfixturevalue(fixture)
         out = tmp_path / "out.pdf"
         optimize_document(src, out, MinimalFileSize())
@@ -58,17 +64,14 @@ class TestColourSpaceConsistency:
         for cs, im, size in results:
             assert im is not None, f"{cs} image failed to decode"
             want = 3 if cs == "/DeviceRGB" else 1
-            assert len(im.getbands()) == want, (
-                f"{cs} declared but stream decodes to {im.mode}"
-            )
+            assert len(im.getbands()) == want, f"{cs} declared but stream decodes to {im.mode}"
             assert im.size == size, "dictionary size disagrees with the stream"
 
-    def test_masked_image_keeps_its_colour(self, smask_pdf, tmp_path):
+    def test_masked_image_keeps_its_colour(self, smask_pdf: Path, tmp_path: Path) -> None:
         """The visible symptom was a purple gradient turning grey."""
         out = tmp_path / "out.pdf"
         optimize_document(smask_pdf, out, MinimalFileSize())
-        cs, im, _size = _decoded_images(out)[0]
-        from PIL import ImageStat
+        _cs, im, _size = _decoded_images(out)[0]
 
         r, g, b = ImageStat.Stat(im.convert("RGB")).mean
         assert not (r == g == b), "image collapsed to greyscale"
@@ -84,13 +87,14 @@ class TestNoBanding:
     ``images.psnr_floor``.
     """
 
-    def test_gradient_round_trips_above_its_floor(self, gradient_pdf, tmp_path):
+    def test_gradient_round_trips_above_its_floor(self, gradient_pdf: Path, tmp_path: Path) -> None:
         out = tmp_path / "out.pdf"
         optimize_document(gradient_pdf, out, Web())
 
         source = gradient_image()
         _cs, got, size = _decoded_images(out)[0]
-        reference = source.resize(size, Image.LANCZOS) if source.size != size else source
+        img: int = Image.LANCZOS  # type: ignore[attr-defined]
+        reference = source.resize(size, img) if source.size != size else source
 
         floor = psnr_floor(Web(), reference)
         measured = psnr(reference, got)
@@ -98,16 +102,13 @@ class TestNoBanding:
             f"gradient came back at {measured:.1f} dB, floor is {floor:.1f} dB"
         )
 
-    def test_the_cheap_banding_encoding_is_refused(self):
+    def test_the_cheap_banding_encoding_is_refused(self) -> None:
         """The optimizer must decline an encoding that is smaller but banded.
 
         Encoding a gradient at a low JPEG 2000 rate is dramatically cheaper
         and posts a plausible PSNR. Selecting on size alone picks it every
         time; the floor is what rejects it.
         """
-        import io
-
-        from pdfdiet.images import encode_candidates
 
         im = gradient_image(512, 512)
         profile = Web()
@@ -143,12 +144,12 @@ class TestDedupe:
     repointed and nothing was actually saved.
     """
 
-    def _pdf_with_duplicate_images(self, path):
+    def _pdf_with_duplicate_images(self, path: Path) -> Path:
         pdf = pikepdf.new()
         im = gradient_image(100, 100)
         payload = zlib.compress(im.tobytes(), 6)
 
-        names = {}
+        names: dict[Any, Any] = {}
         for i in range(2):
             xo = pdf.make_stream(payload)  # byte-identical twins
             xo.Type, xo.Subtype = Name.XObject, Name.Image
@@ -164,9 +165,9 @@ class TestDedupe:
             b"q 200 0 0 200 0 0 cm /Im0 Do Q q 200 0 0 200 300 0 cm /Im1 Do Q"
         )
         pdf.save(str(path))
-        return str(path)
+        return path
 
-    def test_identical_streams_merge(self, tmp_path):
+    def test_identical_streams_merge(self, tmp_path: Path) -> None:
         src = self._pdf_with_duplicate_images(tmp_path / "dup.pdf")
         with pikepdf.open(src) as pdf:
             merged = dedupe(pdf)
@@ -176,7 +177,7 @@ class TestDedupe:
                 "both names should now resolve to one object"
             )
 
-    def test_dedupe_is_lossless(self, tmp_path):
+    def test_dedupe_is_lossless(self, tmp_path: Path) -> None:
         src = self._pdf_with_duplicate_images(tmp_path / "dup.pdf")
         with pikepdf.open(src) as pdf:
             before = pdf.pages[0].Resources.XObject["/Im0"].read_raw_bytes()
@@ -184,7 +185,7 @@ class TestDedupe:
             after = pdf.pages[0].Resources.XObject["/Im0"].read_raw_bytes()
         assert before == after
 
-    def test_dedupe_shrinks_the_file(self, tmp_path):
+    def test_dedupe_shrinks_the_file(self, tmp_path: Path) -> None:
         src = self._pdf_with_duplicate_images(tmp_path / "dup.pdf")
         out = tmp_path / "out.pdf"
         result = optimize_document(src, out, Web())
@@ -192,8 +193,7 @@ class TestDedupe:
             images = [
                 o
                 for o in pdf.objects
-                if isinstance(o, pikepdf.Stream)
-                and o.get("/Subtype") == pikepdf.Name.Image
+                if isinstance(o, pikepdf.Stream) and o.get("/Subtype") == pikepdf.Name.Image
             ]
         assert len(images) == 1, "duplicate images should collapse to one"
         assert result.after_bytes < result.before_bytes
@@ -202,7 +202,9 @@ class TestDedupe:
 class TestCropCorrectness:
     """Cropping must be paired with a matrix rewrite or the page shifts."""
 
-    def test_cropped_page_still_covers_the_same_area(self, clipped_pdf, tmp_path):
+    def test_cropped_page_still_covers_the_same_area(
+        self, clipped_pdf: Path, tmp_path: Path
+    ) -> None:
         out = tmp_path / "out.pdf"
         optimize_document(clipped_pdf, out, Web())
         with pikepdf.open(out) as pdf:
@@ -212,7 +214,7 @@ class TestCropCorrectness:
         assert "cm" in content
         assert "Do" in content
 
-    def test_no_crop_no_rewrite(self, gradient_pdf, tmp_path):
+    def test_no_crop_no_rewrite(self, gradient_pdf: Path, tmp_path: Path) -> None:
         """An unclipped image needs no corrective matrix."""
         out = tmp_path / "out.pdf"
         optimize_document(gradient_pdf, out, Web())

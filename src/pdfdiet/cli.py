@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Command line interface."""
 
-from __future__ import annotations
-
 import argparse
 import os
 import sys
@@ -12,7 +10,10 @@ from . import __version__
 from .optimizer import optimize_document
 from .profiles import PROFILES
 
-__all__ = ["main", "build_parser"]
+__all__ = [
+    "build_parser",
+    "main",
+]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -22,9 +23,7 @@ def build_parser() -> argparse.ArgumentParser:
         "optimizeDocument, on a permissively licensed stack.",
     )
     ap.add_argument("input", help="PDF to compress")
-    ap.add_argument(
-        "output", nargs="?", help="output path (default: <input>.optimized.pdf)"
-    )
+    ap.add_argument("output", nargs="?", help="output path (default: <input>.optimized.pdf)")
     ap.add_argument(
         "-p",
         "--profile",

@@ -41,8 +41,6 @@ intents. The JDK's profile, which the backend embeds, is GPL-licensed data
 and cannot be shipped here.
 """
 
-from __future__ import annotations
-
 import contextlib
 from importlib import resources
 
@@ -103,11 +101,7 @@ def _embedded_copy(pdf: pikepdf.Pdf) -> pikepdf.Object | None:
     for page in pdf.pages:
         try:
             cs = page.obj.Resources.ColorSpace.DefaultRGB
-            if (
-                isinstance(cs, Array)
-                and cs[0] == Name.ICCBased
-                and cs[1].read_bytes() == want
-            ):
+            if isinstance(cs, Array) and cs[0] == Name.ICCBased and cs[1].read_bytes() == want:
                 return cs[1]
         except Exception:
             continue

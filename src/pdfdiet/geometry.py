@@ -9,8 +9,6 @@ under, and the region of it you can actually see depends on the clipping
 path in force at that moment. Both have to come out of the content stream.
 """
 
-from __future__ import annotations
-
 import contextlib
 import math
 from dataclasses import dataclass
@@ -21,16 +19,16 @@ from .profiles import Profile
 
 __all__ = [
     "IDENTITY",
-    "mat_mul",
+    "Placement",
+    "Plan",
     "apply",
-    "is_axis_aligned",
     "bbox_of_unit_square",
     "intersect",
-    "union",
-    "Placement",
-    "scan_placements",
-    "Plan",
+    "is_axis_aligned",
+    "mat_mul",
     "plan_image",
+    "scan_placements",
+    "union",
 ]
 
 #: Identity transform, in PDF's six-number matrix form.
@@ -78,7 +76,9 @@ def bbox_of_unit_square(m: tuple) -> tuple[float, float, float, float]:
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-def intersect(a, b):
+def intersect(
+    a: tuple[float, float, float, float] | None, b: tuple[float, float, float, float] | None
+) -> tuple[float, float, float, float] | None:
     """Intersect two bboxes; ``None`` acts as 'unbounded'."""
     if a is None:
         return b
@@ -88,7 +88,9 @@ def intersect(a, b):
     return r if r[0] < r[2] and r[1] < r[3] else (0.0, 0.0, 0.0, 0.0)
 
 
-def union(a, b):
+def union(
+    a: tuple[float, float, float, float] | None, b: tuple[float, float, float, float] | None
+) -> tuple[float, float, float, float] | None:
     """Union of two bboxes; ``None`` acts as 'empty'."""
     if a is None:
         return b
@@ -103,7 +105,7 @@ class Placement:
 
     objgen: tuple  # pikepdf object id, stable within one Pdf
     ctm: tuple  # matrix in force at the `Do`
-    clip: tuple | None  # device-space clip bbox, or None for unclipped
+    clip: tuple[float, float, float, float] | None  # device-space clip bbox, or None for unclipped
     px: tuple[int, int]  # the XObject's own pixel dimensions
 
 
@@ -317,11 +319,11 @@ def plan_image(placements: list[Placement], profile: Profile) -> Plan | None:
         uv = None
 
     if uv is not None:
-        left = max(0, int(math.floor(uv[0] * px_w)))
-        right = min(px_w, int(math.ceil(uv[2] * px_w)))
+        left = max(0, math.floor(uv[0] * px_w))
+        right = min(px_w, math.ceil(uv[2] * px_w))
         # PDF image space puts row 0 at the TOP, so v flips.
-        top = max(0, int(math.floor((1.0 - uv[3]) * px_h)))
-        bottom = min(px_h, int(math.ceil((1.0 - uv[1]) * px_h)))
+        top = max(0, math.floor((1.0 - uv[3]) * px_h))
+        bottom = min(px_h, math.ceil((1.0 - uv[1]) * px_h))
         if right - left < 2 or bottom - top < 2:
             return None
         crop = (left, top, right, bottom)
@@ -351,9 +353,9 @@ def plan_image(placements: list[Placement], profile: Profile) -> Plan | None:
     if target:
         thr = profile.threshold_dpi
         if dpi_x > thr:
-            nw = max(1, int(round(cw * target / dpi_x)))
+            nw = max(1, round(cw * target / dpi_x))
         if dpi_y > thr:
-            nh = max(1, int(round(ch * target / dpi_y)))
+            nh = max(1, round(ch * target / dpi_y))
 
     if crop is None and (nw, nh) == (px_w, px_h):
         return Plan(None, (px_w, px_h), None)

@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """The top-level optimization pass."""
 
-from __future__ import annotations
-
 import os
 from dataclasses import dataclass, field
 
@@ -23,7 +21,7 @@ from .images import (
 from .profiles import Profile, Web
 from .srgb import tag_srgb
 
-__all__ = ["Optimizer", "ImageResult", "Result", "optimize_document"]
+__all__ = ["ImageResult", "Optimizer", "Result", "optimize_document"]
 
 
 @dataclass
@@ -119,9 +117,7 @@ class Optimizer:
             spec["cs"] = "/DeviceGray"
             set_image(smask_obj, pdf, spec, plan.size)
 
-    def optimize_document(
-        self, in_path, out_path, profile: Profile | None = None
-    ) -> Result:
+    def optimize_document(self, in_path, out_path, profile: Profile | None = None) -> Result:
         """Optimize ``in_path`` into ``out_path``. Returns a :class:`Result`."""
         profile = profile or Web()
         before_bytes = os.path.getsize(in_path)

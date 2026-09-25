@@ -7,8 +7,6 @@ before the guards below existed. Read `CLAUDE.md` before changing the codec
 selection logic.
 """
 
-from __future__ import annotations
-
 import contextlib
 import io
 import math
@@ -20,17 +18,17 @@ from PIL import Image, ImageChops, ImageFile, ImageFilter, ImageStat
 from .profiles import Profile
 
 __all__ = [
-    "flate",
-    "psnr",
-    "detail",
-    "psnr_floor",
-    "normalize_mode",
-    "load_pil",
-    "encode_candidates",
-    "reduce_complexity",
-    "set_image",
     "ENCODABLE_MODES",
     "PSNR_FLOOR_CEILING",
+    "detail",
+    "encode_candidates",
+    "flate",
+    "load_pil",
+    "normalize_mode",
+    "psnr",
+    "psnr_floor",
+    "reduce_complexity",
+    "set_image",
 ]
 
 # Pillow refuses very large images by default as a decompression-bomb guard.
@@ -87,9 +85,7 @@ def detail(im: Image.Image) -> float:
     decide how much fidelity an image needs.
     """
     g = im.convert("L")
-    return ImageStat.Stat(
-        ImageChops.difference(g, g.filter(ImageFilter.GaussianBlur(2)))
-    ).mean[0]
+    return ImageStat.Stat(ImageChops.difference(g, g.filter(ImageFilter.GaussianBlur(2)))).mean[0]
 
 
 #: Absolute ceiling on the per-image quality floor, in dB.
@@ -330,9 +326,7 @@ def encode_candidates(im: Image.Image, profile: Profile) -> list[tuple[int, dict
         (len(raw), {"data": raw, "filter": "/FlateDecode", "cs": cs, "bpc": 8})
     ]
 
-    hit = _search_codec(
-        lambda q: _encode_jpeg(im, q, profile), *_JPEG_RANGE, im, cs, floor
-    )
+    hit = _search_codec(lambda q: _encode_jpeg(im, q, profile), *_JPEG_RANGE, im, cs, floor)
     if hit:
         out.append((hit[0], {"data": hit[1], "filter": "/DCTDecode", "cs": cs, "bpc": 8}))
 
@@ -343,9 +337,7 @@ def encode_candidates(im: Image.Image, profile: Profile) -> list[tuple[int, dict
     return out
 
 
-def set_image(
-    xobj: pikepdf.Object, pdf: pikepdf.Pdf, spec: dict, size: tuple[int, int]
-) -> None:
+def set_image(xobj: pikepdf.Object, pdf: pikepdf.Pdf, spec: dict, size: tuple[int, int]) -> None:
     """Overwrite an image XObject in place with new pixel data.
 
     Done in place so every existing reference to the object stays valid.

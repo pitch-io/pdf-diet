@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Document-level surgery: placement rewriting, pruning, deduplication."""
 
-from __future__ import annotations
-
 import contextlib
 import hashlib
 
@@ -11,7 +9,12 @@ import pikepdf
 
 from .profiles import RemovalOptions
 
-__all__ = ["adjust_matrix", "rewrite_placements", "prune", "dedupe"]
+__all__ = [
+    "adjust_matrix",
+    "dedupe",
+    "prune",
+    "rewrite_placements",
+]
 
 
 # --------------------------------------------------------------------------
