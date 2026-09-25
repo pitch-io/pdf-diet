@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-__all__ = ["RemovalOptions", "Profile", "Web", "MinimalFileSize", "PROFILES"]
+__all__ = ["PROFILES", "MinimalFileSize", "Profile", "RemovalOptions", "Web"]
 
 
 @dataclass

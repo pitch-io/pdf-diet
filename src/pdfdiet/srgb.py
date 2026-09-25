@@ -103,11 +103,7 @@ def _embedded_copy(pdf: pikepdf.Pdf) -> pikepdf.Object | None:
     for page in pdf.pages:
         try:
             cs = page.obj.Resources.ColorSpace.DefaultRGB
-            if (
-                isinstance(cs, Array)
-                and cs[0] == Name.ICCBased
-                and cs[1].read_bytes() == want
-            ):
+            if isinstance(cs, Array) and cs[0] == Name.ICCBased and cs[1].read_bytes() == want:
                 return cs[1]
         except Exception:
             continue

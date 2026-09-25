@@ -9,17 +9,18 @@ PSNR comparison of rendered pages at the time they were broken).
 
 from __future__ import annotations
 
+import io
 import zlib
 
 import pikepdf
 import pytest
 from pikepdf import Dictionary, Name
-from PIL import Image
+from PIL import Image, ImageStat
 
 from conftest import PAGE_H, PAGE_W, gradient_image
 from pdfdiet import MinimalFileSize, Web, optimize_document
 from pdfdiet.document import dedupe
-from pdfdiet.images import load_pil, psnr, psnr_floor
+from pdfdiet.images import encode_candidates, load_pil, psnr, psnr_floor
 
 
 def _decoded_images(path):
@@ -58,17 +59,14 @@ class TestColourSpaceConsistency:
         for cs, im, size in results:
             assert im is not None, f"{cs} image failed to decode"
             want = 3 if cs == "/DeviceRGB" else 1
-            assert len(im.getbands()) == want, (
-                f"{cs} declared but stream decodes to {im.mode}"
-            )
+            assert len(im.getbands()) == want, f"{cs} declared but stream decodes to {im.mode}"
             assert im.size == size, "dictionary size disagrees with the stream"
 
     def test_masked_image_keeps_its_colour(self, smask_pdf, tmp_path):
         """The visible symptom was a purple gradient turning grey."""
         out = tmp_path / "out.pdf"
         optimize_document(smask_pdf, out, MinimalFileSize())
-        cs, im, _size = _decoded_images(out)[0]
-        from PIL import ImageStat
+        _cs, im, _size = _decoded_images(out)[0]
 
         r, g, b = ImageStat.Stat(im.convert("RGB")).mean
         assert not (r == g == b), "image collapsed to greyscale"
@@ -105,9 +103,6 @@ class TestNoBanding:
         and posts a plausible PSNR. Selecting on size alone picks it every
         time; the floor is what rejects it.
         """
-        import io
-
-        from pdfdiet.images import encode_candidates
 
         im = gradient_image(512, 512)
         profile = Web()
@@ -192,8 +187,7 @@ class TestDedupe:
             images = [
                 o
                 for o in pdf.objects
-                if isinstance(o, pikepdf.Stream)
-                and o.get("/Subtype") == pikepdf.Name.Image
+                if isinstance(o, pikepdf.Stream) and o.get("/Subtype") == pikepdf.Name.Image
             ]
         assert len(images) == 1, "duplicate images should collapse to one"
         assert result.after_bytes < result.before_bytes

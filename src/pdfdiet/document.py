@@ -11,7 +11,12 @@ import pikepdf
 
 from .profiles import RemovalOptions
 
-__all__ = ["adjust_matrix", "rewrite_placements", "prune", "dedupe"]
+__all__ = [
+    "adjust_matrix",
+    "dedupe",
+    "prune",
+    "rewrite_placements",
+]
 
 
 # --------------------------------------------------------------------------

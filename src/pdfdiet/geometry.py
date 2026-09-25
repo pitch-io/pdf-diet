@@ -21,16 +21,16 @@ from .profiles import Profile
 
 __all__ = [
     "IDENTITY",
-    "mat_mul",
+    "Placement",
+    "Plan",
     "apply",
-    "is_axis_aligned",
     "bbox_of_unit_square",
     "intersect",
-    "union",
-    "Placement",
-    "scan_placements",
-    "Plan",
+    "is_axis_aligned",
+    "mat_mul",
     "plan_image",
+    "scan_placements",
+    "union",
 ]
 
 #: Identity transform, in PDF's six-number matrix form.

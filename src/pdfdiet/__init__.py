@@ -22,16 +22,16 @@ from .srgb import ForeignOutputIntent, tag_srgb
 __version__ = "1.0.0"
 
 __all__ = [
-    "Optimizer",
-    "optimize_document",
-    "Result",
-    "ImageResult",
-    "Profile",
-    "Web",
-    "MinimalFileSize",
-    "RemovalOptions",
     "PROFILES",
-    "tag_srgb",
     "ForeignOutputIntent",
+    "ImageResult",
+    "MinimalFileSize",
+    "Optimizer",
+    "Profile",
+    "RemovalOptions",
+    "Result",
+    "Web",
     "__version__",
+    "optimize_document",
+    "tag_srgb",
 ]

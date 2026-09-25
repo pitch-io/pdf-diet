@@ -150,15 +150,11 @@ def build_vector_pdf(
             res.XObject = Dictionary(Fx0=fx)
             page.Contents = pdf.make_stream(b"/Fx0 Do")
         elif soft_mask:
-            group = pdf.make_stream(
-                b"0 0 0 rg 0 0 100 200 re f 1 1 1 rg 100 0 100 200 re f"
-            )
+            group = pdf.make_stream(b"0 0 0 rg 0 0 100 200 re f 1 1 1 rg 100 0 100 200 re f")
             group.Type = Name.XObject
             group.Subtype = Name.Form
             group.BBox = [0, 0, 200, 200]
-            group.Group = Dictionary(
-                Type=Name.Group, S=Name.Transparency, CS=Name.DeviceRGB
-            )
+            group.Group = Dictionary(Type=Name.Group, S=Name.Transparency, CS=Name.DeviceRGB)
             group.Resources = Dictionary()
             res.ExtGState = Dictionary(
                 GS0=Dictionary(
@@ -217,9 +213,7 @@ def smask_pdf(tmp_path, gradient_src):
     """Image carrying a graded soft mask -- the RGBA decode hazard."""
     w, h = gradient_src.size
     mask = Image.linear_gradient("L").resize((w, h))
-    return build_pdf(
-        tmp_path / "smask.pdf", [(gradient_src, (PAGE_W, PAGE_H, 0, 0), None, mask)]
-    )
+    return build_pdf(tmp_path / "smask.pdf", [(gradient_src, (PAGE_W, PAGE_H, 0, 0), None, mask)])
 
 
 @pytest.fixture
@@ -227,9 +221,7 @@ def opaque_smask_pdf(tmp_path, gradient_src):
     """Soft mask that is entirely opaque: should be dropped outright."""
     w, h = gradient_src.size
     mask = Image.new("L", (w, h), 255)
-    return build_pdf(
-        tmp_path / "opaque.pdf", [(gradient_src, (PAGE_W, PAGE_H, 0, 0), None, mask)]
-    )
+    return build_pdf(tmp_path / "opaque.pdf", [(gradient_src, (PAGE_W, PAGE_H, 0, 0), None, mask)])
 
 
 @pytest.fixture

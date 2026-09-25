@@ -88,9 +88,7 @@ class TestTagging:
         _tag(vector_pdf, out)
         assert _declaration(out)["intents"][0]["bytes"] == profile_bytes()
 
-    def test_page_substitutes_the_intent_profile_for_device_rgb(
-        self, vector_pdf, tmp_path
-    ):
+    def test_page_substitutes_the_intent_profile_for_device_rgb(self, vector_pdf, tmp_path):
         out = tmp_path / "out.pdf"
         _tag(vector_pdf, out)
         d = _declaration(out)
@@ -108,9 +106,7 @@ class TestTagging:
         assert d["icc_streams"] == 1
 
     def test_existing_colour_spaces_survive(self, tmp_path):
-        src = build_vector_pdf(
-            tmp_path / "in.pdf", colour_spaces={"/CS0": Name.DeviceRGB}
-        )
+        src = build_vector_pdf(tmp_path / "in.pdf", colour_spaces={"/CS0": Name.DeviceRGB})
         out = tmp_path / "out.pdf"
         _tag(src, out)
         with pikepdf.open(out) as pdf:
@@ -119,9 +115,7 @@ class TestTagging:
             assert "/DefaultRGB" in spaces
 
     def test_existing_default_rgb_is_not_replaced(self, tmp_path):
-        src = build_vector_pdf(
-            tmp_path / "in.pdf", colour_spaces={"/DefaultRGB": Name.DeviceRGB}
-        )
+        src = build_vector_pdf(tmp_path / "in.pdf", colour_spaces={"/DefaultRGB": Name.DeviceRGB})
         out = tmp_path / "out.pdf"
         _tag(src, out)
         with pikepdf.open(out) as pdf:

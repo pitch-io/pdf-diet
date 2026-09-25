@@ -39,7 +39,7 @@ jobs:
         # Pillow without OpenJPEG silently drops the JPX codec, which removes
         # the codec that wins on most slide-deck images rather than failing.
         run: uv run python -c "from PIL import features; assert features.check('jpg_2000'), 'Pillow lacks JPEG 2000 support'"
-      - run: uv run pytest --cov=pdfdiet --cov-report=term-missing
+      - run: uv run pytest --cov-report term-missing
 
   build:
     runs-on: ubuntu-latest

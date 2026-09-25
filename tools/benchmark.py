@@ -49,7 +49,7 @@ from dataclasses import dataclass, field
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 
-import pdfdiet  # noqa: E402
+import pdfdiet
 
 SUFFIXES = {
     "uncompressed.pdf": "raw",
@@ -151,11 +151,7 @@ def render(path: str, out_dir: str, pages: list[int], dpi: int) -> dict[int, str
             subprocess.run(cmd, check=True, capture_output=True, timeout=300)
         except Exception:
             continue
-        hits = [
-            f
-            for f in os.listdir(out_dir)
-            if f.startswith(f"p{page}-") and f.endswith(".png")
-        ]
+        hits = [f for f in os.listdir(out_dir) if f.startswith(f"p{page}-") and f.endswith(".png")]
         if hits:
             result[page] = os.path.join(out_dir, hits[0])
     return result
@@ -285,10 +281,7 @@ def report(rows: list[Row], do_render: bool) -> None:
     ok = [r for r in rows if not r.error and r.our_bytes]
     bad = [r for r in rows if r.error]
 
-    header = (
-        f"{'deck':<42} {'q':>4} {'pg':>4} {'raw':>8} "
-        f"{'theirs':>8} {'ours':>8} {'size':>8}"
-    )
+    header = f"{'deck':<42} {'q':>4} {'pg':>4} {'raw':>8} {'theirs':>8} {'ours':>8} {'size':>8}"
     if do_render:
         header += f" {'theirs dB':>10} {'ours dB':>9} {'dB':>7}"
     print("\n" + header)
@@ -347,8 +340,7 @@ def report(rows: list[Row], do_render: bool) -> None:
                 )
         total_time = sum(r.seconds for r in sel)
         print(
-            f"            wall time {total_time:.0f}s total, "
-            f"{total_time / len(sel):.1f}s per deck"
+            f"            wall time {total_time:.0f}s total, {total_time / len(sel):.1f}s per deck"
         )
     if bad:
         print(f"\n{len(bad)} failures")
@@ -413,9 +405,7 @@ def main(argv=None) -> int:
         choices=["0.6", "0.8"],
         help="which reference qualities to compare (default: both)",
     )
-    ap.add_argument(
-        "-n", "--limit", type=int, default=None, help="only the first N decks"
-    )
+    ap.add_argument("-n", "--limit", type=int, default=None, help="only the first N decks")
     ap.add_argument(
         "-j",
         "--jobs",
@@ -444,9 +434,7 @@ def main(argv=None) -> int:
 
     cases = discover(args.directory)
     if not cases:
-        print(
-            f"benchmark: no complete triples found in {args.directory}", file=sys.stderr
-        )
+        print(f"benchmark: no complete triples found in {args.directory}", file=sys.stderr)
         return 2
     cases.sort(key=lambda c: os.path.getsize(c.raw))
     if args.limit:
@@ -458,11 +446,7 @@ def main(argv=None) -> int:
     print(
         f"{len(cases)} decks, qualities {', '.join(qualities)}, "
         f"profile {args.profile}, {len(jobs)} runs, {args.jobs} workers"
-        + (
-            f", rendering {args.sample_pages} pages at {args.dpi} DPI"
-            if args.render
-            else ""
-        )
+        + (f", rendering {args.sample_pages} pages at {args.dpi} DPI" if args.render else "")
     )
 
     tmp = None

@@ -48,6 +48,10 @@ dev = [
     "ruff>=0.6",
 ]
 
+[tool.uv]
+# Keep the resolver honest about the oldest interpreter we claim to support.
+required-version = ">=0.5"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/pdfdiet"]
 
@@ -69,30 +73,51 @@ include = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q --strict-markers"
+addopts = "-vv --strict-markers --cov pdfdiet --cov-report term --cov-report html"
 markers = [
     "slow: takes more than a couple of seconds",
     "reference: needs the reference PDFs, which are not in the repo",
 ]
 
 [tool.ruff]
-line-length = 90
+line-length = 100
 target-version = "py310"
 src = ["src", "tests"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+extend-select = [
+    "B",   # flake8 bugbear
+    "C",   # flake8 comprehensions
+    "E",   # pycodestyle errors
+    "F",   # pyflakes
+    "I",   # isort
+    "PL",  # pylint
+    "RUF", # ruff
+    "SIM", # flake8 simplify
+    "UP",  # pyupgrade
+    "W",   # pycodestyle warnings
+]
 ignore = [
-    # The PDF object model throws a wide variety of exceptions from C++;
-    # broad catches around it are deliberate and pervasive.
-    "B904",
+    "B904",    # raise-without-from-inside-except: The PDF object model throws a wide variety of exceptions from C++; broad catches around it are deliberate and pervasive.
+    "BLE001",  # blind-except: allow `catch Exception:`
+    "C901",    # complex-structure
+    "PLR0912", # too-many-branches
+    "PLR0913", # too-many-arguments
+    "PLR0915", # too-many-statements
+    "PLR0917", # too-many-positional-arguments
+    "PLR2004", # magic-value-comparison: TODO should remove and use constants with sensible names
+    "RUF046",  # unnecessary-cast-to-int: TODO remove after running CI with all instances yanked across the full matrix of supported python versions
+    "S110",    # try-except-pass: TODO should remove this and better handle logging with a real logger
+    "S112",    # try-except-continue: TODO should remove this and better handle logging with a real logger
 ]
 
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["E501"]
-
-[tool.ruff.lint.isort]
-known-first-party = ["pdfdiet"]
+"tools/*" = [
+    "PLC0415", # import-outside-top-level
+]
+"tests/*" = [
+    "E501",
+]
 
 [tool.ruff.format]
 # Match the existing style: the codebase uses double quotes throughout and
@@ -110,7 +135,3 @@ exclude_also = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
-
-[tool.uv]
-# Keep the resolver honest about the oldest interpreter we claim to support.
-required-version = ">=0.5"

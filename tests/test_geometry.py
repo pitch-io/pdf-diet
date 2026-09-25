@@ -59,9 +59,7 @@ class TestBoxes:
 
 
 def _placement(px, w_pt, h_pt, clip=None):
-    return Placement(
-        objgen=(1, 0), ctm=(w_pt, 0.0, 0.0, h_pt, 0.0, 0.0), clip=clip, px=px
-    )
+    return Placement(objgen=(1, 0), ctm=(w_pt, 0.0, 0.0, h_pt, 0.0, 0.0), clip=clip, px=px)
 
 
 class TestPlanner:
