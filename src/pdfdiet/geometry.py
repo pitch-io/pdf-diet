@@ -76,7 +76,9 @@ def bbox_of_unit_square(m: tuple) -> tuple[float, float, float, float]:
     return (min(xs), min(ys), max(xs), max(ys))
 
 
-def intersect(a, b):
+def intersect(
+    a: tuple[float, float, float, float] | None, b: tuple[float, float, float, float] | None
+) -> tuple[float, float, float, float] | None:
     """Intersect two bboxes; ``None`` acts as 'unbounded'."""
     if a is None:
         return b
@@ -86,7 +88,9 @@ def intersect(a, b):
     return r if r[0] < r[2] and r[1] < r[3] else (0.0, 0.0, 0.0, 0.0)
 
 
-def union(a, b):
+def union(
+    a: tuple[float, float, float, float] | None, b: tuple[float, float, float, float] | None
+) -> tuple[float, float, float, float] | None:
     """Union of two bboxes; ``None`` acts as 'empty'."""
     if a is None:
         return b
@@ -101,7 +105,7 @@ class Placement:
 
     objgen: tuple  # pikepdf object id, stable within one Pdf
     ctm: tuple  # matrix in force at the `Do`
-    clip: tuple | None  # device-space clip bbox, or None for unclipped
+    clip: tuple[float, float, float, float] | None  # device-space clip bbox, or None for unclipped
     px: tuple[int, int]  # the XObject's own pixel dimensions
 
 

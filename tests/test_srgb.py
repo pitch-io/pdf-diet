@@ -7,6 +7,9 @@ streams, so a byte search for ``/DefaultRGB`` finds nothing and a test built on
 one passes for the wrong reason.
 """
 
+from pathlib import Path
+from typing import Any
+
 import pikepdf
 import pytest
 from pikepdf import Dictionary, Name
@@ -17,7 +20,7 @@ from pdfdiet.cli import main
 from pdfdiet.srgb import PROFILE_NAME, ForeignOutputIntent, profile_bytes, tag_srgb
 
 
-def _tag(src, dst) -> int:
+def _tag(src: Path, dst: Path) -> int:
     with pikepdf.open(src) as pdf:
         added = tag_srgb(pdf)
         pdf.save(dst, object_stream_mode=pikepdf.ObjectStreamMode.generate)
@@ -29,7 +32,7 @@ def _default_rgb(resources):
     return None if spaces is None else spaces.get("/DefaultRGB")
 
 
-def _declaration(path) -> dict:
+def _declaration(path: Path) -> dict:
     """Summarise the sRGB declaration, copying values out before the Pdf closes."""
     with pikepdf.open(path) as pdf:
         intents = pdf.Root.get("/OutputIntents")
@@ -42,13 +45,14 @@ def _declaration(path) -> dict:
             for o in pdf.objects
             if isinstance(o, pikepdf.Stream) and o.get("/N") == 3 and "/Subtype" not in o
         ]
-        out = {"pages": pages, "icc_streams": len(icc), "intents": []}
+        intents_list: list[dict[str, Any]] = []
+        out = {"pages": pages, "icc_streams": len(icc), "intents": intents_list}
         for intent in intents or []:
             profile = intent.get("/DestOutputProfile")
             if profile is None:
-                out["intents"].append({"id": str(intent.OutputConditionIdentifier)})
+                intents_list.append({"id": str(intent.OutputConditionIdentifier)})
                 continue
-            out["intents"].append(
+            intents_list.append(
                 {
                     "type": str(intent.get("/Type")),
                     "s": str(intent.get("/S")),
@@ -61,7 +65,7 @@ def _declaration(path) -> dict:
         return out
 
 
-def test_fixture_is_untagged(vector_pdf):
+def test_fixture_is_untagged(vector_pdf: Path) -> None:
     """Otherwise every test below proves nothing."""
     d = _declaration(vector_pdf)
     assert d["intents"] == []
@@ -69,7 +73,7 @@ def test_fixture_is_untagged(vector_pdf):
 
 
 class TestTagging:
-    def test_catalog_gains_one_srgb_output_intent(self, vector_pdf, tmp_path):
+    def test_catalog_gains_one_srgb_output_intent(self, vector_pdf: Path, tmp_path: Path) -> None:
         out = tmp_path / "out.pdf"
         _tag(vector_pdf, out)
         (intent,) = _declaration(out)["intents"]
@@ -78,7 +82,9 @@ class TestTagging:
         assert intent["id"] == PROFILE_NAME
         assert intent["n"] == 3, "three components, so viewers read it as RGB"
 
-    def test_embedded_profile_survives_the_flate_round_trip(self, vector_pdf, tmp_path):
+    def test_embedded_profile_survives_the_flate_round_trip(
+        self, vector_pdf: Path, tmp_path: Path
+    ) -> None:
         # The ICC header alone does not pin the profile down: every RGB
         # profile carries the same signature, so a swapped source would leave
         # the label lying and a header check green.
@@ -86,7 +92,9 @@ class TestTagging:
         _tag(vector_pdf, out)
         assert _declaration(out)["intents"][0]["bytes"] == profile_bytes()
 
-    def test_page_substitutes_the_intent_profile_for_device_rgb(self, vector_pdf, tmp_path):
+    def test_page_substitutes_the_intent_profile_for_device_rgb(
+        self, vector_pdf: Path, tmp_path: Path
+    ) -> None:
         out = tmp_path / "out.pdf"
         _tag(vector_pdf, out)
         d = _declaration(out)
@@ -94,7 +102,7 @@ class TestTagging:
         assert family == "/ICCBased"
         assert ref == d["intents"][0]["profile"], "one stream, stored once"
 
-    def test_every_page_shares_one_profile(self, tmp_path):
+    def test_every_page_shares_one_profile(self, tmp_path: Path) -> None:
         src = build_vector_pdf(tmp_path / "in.pdf", pages=3)
         out = tmp_path / "out.pdf"
         _tag(src, out)
@@ -103,7 +111,7 @@ class TestTagging:
         assert len({p[1] for p in d["pages"]}) == 1
         assert d["icc_streams"] == 1
 
-    def test_existing_colour_spaces_survive(self, tmp_path):
+    def test_existing_colour_spaces_survive(self, tmp_path: Path) -> None:
         src = build_vector_pdf(tmp_path / "in.pdf", colour_spaces={"/CS0": Name.DeviceRGB})
         out = tmp_path / "out.pdf"
         _tag(src, out)
@@ -112,14 +120,14 @@ class TestTagging:
             assert str(spaces.CS0) == "/DeviceRGB"
             assert "/DefaultRGB" in spaces
 
-    def test_existing_default_rgb_is_not_replaced(self, tmp_path):
+    def test_existing_default_rgb_is_not_replaced(self, tmp_path: Path) -> None:
         src = build_vector_pdf(tmp_path / "in.pdf", colour_spaces={"/DefaultRGB": Name.DeviceRGB})
         out = tmp_path / "out.pdf"
         _tag(src, out)
         with pikepdf.open(out) as pdf:
             assert pdf.pages[0].Resources.ColorSpace.DefaultRGB == Name.DeviceRGB
 
-    def test_inherited_resources_are_tagged_on_the_page(self, tmp_path):
+    def test_inherited_resources_are_tagged_on_the_page(self, tmp_path: Path) -> None:
         # Built in memory: qpdf pushes inherited /Resources onto each page
         # when it writes, so this shape never survives a save and reopen.
         src = build_vector_pdf(tmp_path / "in.pdf", pages=2)
@@ -131,7 +139,7 @@ class TestTagging:
             for page in pdf.pages:
                 assert _default_rgb(page.obj.Resources) is not None
 
-    def test_form_xobjects_are_tagged(self, tmp_path):
+    def test_form_xobjects_are_tagged(self, tmp_path: Path) -> None:
         """/DefaultRGB is looked up in the current resources, i.e. the form's."""
         src = build_vector_pdf(tmp_path / "in.pdf", form=True)
         out = tmp_path / "out.pdf"
@@ -142,7 +150,7 @@ class TestTagging:
             assert form_cs is not None
             assert form_cs[1].objgen == page_cs[1].objgen
 
-    def test_soft_mask_groups_are_left_alone(self, tmp_path):
+    def test_soft_mask_groups_are_left_alone(self, tmp_path: Path) -> None:
         """A soft mask's colours become opacity, never pixels; see srgb.py."""
         src = build_vector_pdf(tmp_path / "in.pdf", soft_mask=True)
         out = tmp_path / "out.pdf"
@@ -153,7 +161,7 @@ class TestTagging:
             group = res.ExtGState.GS0.SMask.G
             assert _default_rgb(group.Resources) is None
 
-    def test_tagging_twice_embeds_the_profile_once(self, vector_pdf, tmp_path):
+    def test_tagging_twice_embeds_the_profile_once(self, vector_pdf: Path, tmp_path: Path) -> None:
         once, twice = tmp_path / "1.pdf", tmp_path / "2.pdf"
         assert _tag(vector_pdf, once) > 0
         assert _tag(once, twice) == 0
@@ -172,29 +180,31 @@ class TestForeignOutputIntent:
         )
         return build_vector_pdf(tmp_path / "cmyk.pdf", output_intent=intent)
 
-    def test_is_refused_before_anything_changes(self, cmyk_pdf):
+    def test_is_refused_before_anything_changes(self, cmyk_pdf: Path) -> None:
         with pikepdf.open(cmyk_pdf) as pdf:
             with pytest.raises(ForeignOutputIntent):
                 tag_srgb(pdf)
             assert str(pdf.Root.OutputIntents[0].OutputConditionIdentifier) == "FOGRA39"
             assert _default_rgb(pdf.pages[0].Resources) is None
 
-    def test_optimizer_reports_the_skip_and_still_delivers(self, cmyk_pdf, tmp_path):
+    def test_optimizer_reports_the_skip_and_still_delivers(
+        self, cmyk_pdf: Path, tmp_path: Path
+    ) -> None:
         out = tmp_path / "out.pdf"
         result = optimize_document(cmyk_pdf, out, Web(declare_srgb=True))
         assert not result.srgb_tagged
-        assert "output intent" in result.srgb_skipped
+        assert result.srgb_skipped and "output intent" in result.srgb_skipped
         assert _declaration(out)["intents"][0]["id"] == "FOGRA39"
 
 
 class TestOptimizer:
-    def test_off_by_default(self, vector_pdf, tmp_path):
+    def test_off_by_default(self, vector_pdf: Path, tmp_path: Path) -> None:
         out = tmp_path / "out.pdf"
         result = optimize_document(vector_pdf, out, Web())
         assert not result.srgb_tagged
         assert _declaration(out)["intents"] == []
 
-    def test_declares_srgb_when_asked(self, gradient_pdf, tmp_path):
+    def test_declares_srgb_when_asked(self, gradient_pdf: Path, tmp_path: Path) -> None:
         """Also covers a recompressed image: it is written as DeviceRGB."""
         out = tmp_path / "out.pdf"
         result = optimize_document(gradient_pdf, out, Web(declare_srgb=True))
@@ -204,7 +214,7 @@ class TestOptimizer:
         assert len(d["intents"]) == 1
         assert d["pages"][0] is not None
 
-    def test_survives_remove_output_intents(self, vector_pdf, tmp_path):
+    def test_survives_remove_output_intents(self, vector_pdf: Path, tmp_path: Path) -> None:
         """MinimalFileSize prunes intents; the explicit opt-in must win."""
         profile = MinimalFileSize(declare_srgb=True)
         assert profile.removal.remove_output_intents
@@ -212,13 +222,13 @@ class TestOptimizer:
         optimize_document(vector_pdf, out, profile)
         assert len(_declaration(out)["intents"]) == 1
 
-    def test_repeated_runs_keep_one_profile(self, vector_pdf, tmp_path):
+    def test_repeated_runs_keep_one_profile(self, vector_pdf: Path, tmp_path: Path) -> None:
         once, twice = tmp_path / "1.pdf", tmp_path / "2.pdf"
         optimize_document(vector_pdf, once, MinimalFileSize(declare_srgb=True))
         optimize_document(once, twice, MinimalFileSize(declare_srgb=True))
         assert _declaration(twice)["icc_streams"] == 1
 
-    def test_cli_flag(self, vector_pdf, tmp_path):
-        out = str(tmp_path / "out.pdf")
-        assert main([vector_pdf, out, "--srgb"]) == 0
+    def test_cli_flag(self, vector_pdf: Path, tmp_path: Path) -> None:
+        out = tmp_path / "out.pdf"
+        assert main([str(vector_pdf), str(out), "--srgb"]) == 0
         assert len(_declaration(out)["intents"]) == 1

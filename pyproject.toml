@@ -115,7 +115,7 @@ ignore = [
     "PLC0415", # import-outside-top-level
 ]
 "tests/*" = [
-    "E501",
+    "TRY002", # raise-vanilla-class
 ]
 
 [tool.ruff.format]

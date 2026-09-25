@@ -10,6 +10,7 @@ that exercises the behaviour in question.
 import math
 import random
 import zlib
+from pathlib import Path
 
 import pikepdf
 import pytest
@@ -28,6 +29,9 @@ def gradient_image(w: int = 800, h: int = 450) -> Image.Image:
     """A smooth two-axis colour ramp: the classic banding provoker."""
     im = Image.new("RGB", (w, h))
     px = im.load()
+    if px is None:
+        raise Exception("pixels were none")
+
     for y in range(h):
         for x in range(w):
             px[x, y] = (
@@ -43,6 +47,9 @@ def noisy_image(w: int = 400, h: int = 300, seed: int = 7) -> Image.Image:
     rnd = random.Random(seed)
     im = Image.new("RGB", (w, h))
     px = im.load()
+    if px is None:
+        raise Exception("pixels were none")
+
     for y in range(h):
         for x in range(w):
             base = int(128 + 100 * math.sin(x / 23.0) * math.cos(y / 17.0))
@@ -74,7 +81,7 @@ def _xobject(pdf: pikepdf.Pdf, im: Image.Image) -> pikepdf.Object:
     return xo
 
 
-def build_pdf(path, items, page_size=(PAGE_W, PAGE_H)) -> str:
+def build_pdf(path: Path, items, page_size=(PAGE_W, PAGE_H)) -> Path:
     """Build a one-page PDF.
 
     Each item is ``(pil_image, placement, clip, smask)`` where placement is
@@ -109,11 +116,11 @@ def build_pdf(path, items, page_size=(PAGE_W, PAGE_H)) -> str:
         parts.append("Q")
 
     page.Resources = Dictionary(
-        XObject=Dictionary(**{k.lstrip("/"): v for k, v in xobjects.items()})
+        XObject=Dictionary(**{k.lstrip("/"): v for k, v in xobjects.items()})  # type: ignore
     )
     page.Contents = pdf.make_stream("\n".join(parts).encode())
     pdf.save(str(path))
-    return str(path)
+    return path
 
 
 def build_vector_pdf(
@@ -123,7 +130,7 @@ def build_vector_pdf(
     soft_mask: bool = False,
     colour_spaces: dict | None = None,
     output_intent: pikepdf.Dictionary | None = None,
-) -> str:
+) -> Path:
     """Build a PDF that fills a rectangle with DeviceRGB and declares no profile.
 
     That is the shape Chrome's print-to-PDF emits. ``form`` draws the fill
@@ -167,7 +174,7 @@ def build_vector_pdf(
     if output_intent is not None:
         pdf.Root.OutputIntents = pikepdf.Array([output_intent])
     pdf.save(str(path))
-    return str(path)
+    return path
 
 
 # --------------------------------------------------------------------------
@@ -181,7 +188,7 @@ def gradient_src():
 
 
 @pytest.fixture
-def gradient_pdf(tmp_path, gradient_src):
+def gradient_pdf(tmp_path, gradient_src) -> Path:
     """Full-page gradient at ~80 DPI: under threshold, recompressed only."""
     return build_pdf(
         tmp_path / "gradient.pdf", [(gradient_src, (PAGE_W, PAGE_H, 0, 0), None, None)]
@@ -207,7 +214,7 @@ def clipped_pdf(tmp_path, gradient_src):
 
 
 @pytest.fixture
-def smask_pdf(tmp_path, gradient_src):
+def smask_pdf(tmp_path: Path, gradient_src: Image.Image) -> Path:
     """Image carrying a graded soft mask -- the RGBA decode hazard."""
     w, h = gradient_src.size
     mask = Image.linear_gradient("L").resize((w, h))
@@ -215,7 +222,7 @@ def smask_pdf(tmp_path, gradient_src):
 
 
 @pytest.fixture
-def opaque_smask_pdf(tmp_path, gradient_src):
+def opaque_smask_pdf(tmp_path: Path, gradient_src: Image.Image) -> Path:
     """Soft mask that is entirely opaque: should be dropped outright."""
     w, h = gradient_src.size
     mask = Image.new("L", (w, h), 255)
@@ -223,7 +230,7 @@ def opaque_smask_pdf(tmp_path, gradient_src):
 
 
 @pytest.fixture
-def mixed_pdf(tmp_path, gradient_src):
+def mixed_pdf(tmp_path: Path, gradient_src: Image.Image) -> Path:
     """A gradient and a noisy photo on one page: different quality needs."""
     return build_pdf(
         tmp_path / "mixed.pdf",
@@ -235,6 +242,6 @@ def mixed_pdf(tmp_path, gradient_src):
 
 
 @pytest.fixture
-def vector_pdf(tmp_path):
+def vector_pdf(tmp_path: Path) -> Path:
     """One DeviceRGB fill, no colour profile: an untagged Chrome export."""
     return build_vector_pdf(tmp_path / "vector.pdf")
