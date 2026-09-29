@@ -51,6 +51,7 @@ The complete command is:
 ```text
 pdf-diet [-p PROFILE] [-q 0..1] [-d DPI] [--no-crop] [--progressive] [--srgb]
          [-v] input [output]
+pdf-diet --srgb-only [-v] input [output]
 ```
 
 | Option | Default | Description |
@@ -63,6 +64,7 @@ pdf-diet [-p PROFILE] [-q 0..1] [-d DPI] [--no-crop] [--progressive] [--srgb]
 | `--no-crop` | off | Do not crop images to their visible area. |
 | `--progressive` | off | Write progressive JPEGs. This usually saves a few percent, but is not covered by PDF's baseline-JPEG wording. |
 | `--srgb` | off | Declare the document's colours as sRGB. See [Colour](#colour). |
+| `--srgb-only` | off | Declare the colours as sRGB and compress nothing. Cannot be combined with the compression options above. See [Colour](#colour). |
 | `-v`, `--verbose` | off | Report what happened to each image. |
 | `--version` | — | Print the installed version. |
 
@@ -114,6 +116,12 @@ after the profile's removals, so it holds under `minimal` too. A document
 that already declares a different output intent, such as a CMYK PDF/X
 condition, is left undeclared rather than overwritten; the result's
 `srgb_skipped` says why.
+
+`--srgb-only` (or `pdfdiet.declare_srgb(in_path, out_path)`) adds the same
+declaration without compressing: no image is re-encoded, nothing is pruned or
+deduplicated, and existing streams keep their encoding. Use it for exports
+that must stay at full resolution. The output is slightly larger than the
+input, by the size of the profile.
 
 ## Python API
 

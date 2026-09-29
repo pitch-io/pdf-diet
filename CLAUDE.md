@@ -115,6 +115,9 @@ These are load-bearing. Tests enforce all of them.
    `remove_output_intents` cannot strip the intent just added; before, so the
    profile merges with an identical copy already in the file. It never
    overwrites a non-sRGB output intent, and never fails the run.
+8. **`declare_srgb` (`--srgb-only`) is lossless.** It opens, tags and saves;
+   no image, prune or dedupe step. Anything that re-encodes belongs in
+   `optimize_document`.
 
 ## Hazards
 

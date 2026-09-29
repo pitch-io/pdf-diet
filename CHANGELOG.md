@@ -4,6 +4,12 @@ All notable changes to this project are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/1.1.0/);
 versioning follows [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-09-29
+
+### Added
+- `--srgb-only` and `declare_srgb()`: declare a PDF's colours as sRGB without
+  compressing it. Lossless; for exports that must keep full resolution.
+
 ## [1.0.0] - 2026-09-22
 
 First release. Implements the Web and MinimalFileSize profiles of the
