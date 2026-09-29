@@ -15,7 +15,7 @@ import pytest
 from pikepdf import Dictionary, Name
 
 from conftest import build_vector_pdf
-from pdfdiet import MinimalFileSize, Web, optimize_document
+from pdfdiet import MinimalFileSize, Web, declare_srgb, optimize_document
 from pdfdiet.cli import main
 from pdfdiet.srgb import PROFILE_NAME, ForeignOutputIntent, profile_bytes, tag_srgb
 
@@ -232,3 +232,54 @@ class TestOptimizer:
         out = tmp_path / "out.pdf"
         assert main([str(vector_pdf), str(out), "--srgb"]) == 0
         assert len(_declaration(out)["intents"]) == 1
+
+
+def _images(path: Path) -> list[tuple[int, int, bytes]]:
+    with pikepdf.open(path) as pdf:
+        return [
+            (int(o.Width), int(o.Height), bytes(o.read_raw_bytes()))
+            for o in pdf.objects
+            if isinstance(o, pikepdf.Stream) and o.get("/Subtype") == Name.Image
+        ]
+
+
+class TestDeclareOnly:
+    def test_declares_srgb_and_leaves_images_alone(self, highdpi_pdf: Path, tmp_path: Path) -> None:
+        """The fixture's image is one Web would downsample."""
+        out = tmp_path / "out.pdf"
+        result = declare_srgb(highdpi_pdf, out)
+        assert result.srgb_tagged and result.srgb_skipped is None
+        assert result.images == []
+        assert _images(out) == _images(highdpi_pdf)
+        d = _declaration(out)
+        assert len(d["intents"]) == 1
+        assert d["pages"][0] is not None
+
+    def test_foreign_intent_is_reported_and_the_file_still_delivered(self, tmp_path: Path) -> None:
+        intent = Dictionary(
+            Type=Name.OutputIntent,
+            S=Name.GTS_PDFX,
+            OutputConditionIdentifier=pikepdf.String("FOGRA39"),
+        )
+        src = build_vector_pdf(tmp_path / "cmyk.pdf", output_intent=intent)
+        out = tmp_path / "out.pdf"
+        result = declare_srgb(src, out)
+        assert not result.srgb_tagged
+        assert result.srgb_skipped and "output intent" in result.srgb_skipped
+        assert _declaration(out)["intents"][0]["id"] == "FOGRA39"
+
+    def test_cli_flag(self, highdpi_pdf: Path, tmp_path: Path) -> None:
+        out = tmp_path / "out.pdf"
+        assert main([str(highdpi_pdf), str(out), "--srgb-only"]) == 0
+        assert _images(out) == _images(highdpi_pdf)
+        assert len(_declaration(out)["intents"]) == 1
+
+    @pytest.mark.parametrize(
+        "flag", [["--quality", "0.8"], ["--profile", "web"], ["--dpi", "96"], ["--no-crop"]]
+    )
+    def test_cli_refuses_compression_options(
+        self, vector_pdf: Path, tmp_path: Path, flag: list[str]
+    ) -> None:
+        out = tmp_path / "out.pdf"
+        assert main([str(vector_pdf), str(out), "--srgb-only", *flag]) == 2
+        assert not out.exists()

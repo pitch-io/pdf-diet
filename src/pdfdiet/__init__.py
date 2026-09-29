@@ -13,11 +13,11 @@ no Ghostscript, no MuPDF, nothing AGPL.
     in.pdf: 26.41 MB -> out.pdf: 0.89 MB (29.7x smaller, 96.6% saved)
 """
 
-from .optimizer import ImageResult, Optimizer, Result, optimize_document
+from .optimizer import ImageResult, Optimizer, Result, declare_srgb, optimize_document
 from .profiles import PROFILES, MinimalFileSize, Profile, RemovalOptions, Web
 from .srgb import ForeignOutputIntent, tag_srgb
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 __all__ = [
     "PROFILES",
@@ -30,6 +30,7 @@ __all__ = [
     "Result",
     "Web",
     "__version__",
+    "declare_srgb",
     "optimize_document",
     "tag_srgb",
 ]

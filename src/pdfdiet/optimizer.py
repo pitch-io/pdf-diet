@@ -117,6 +117,35 @@ class Optimizer:
             spec["cs"] = "/DeviceGray"
             set_image(smask_obj, pdf, spec, plan.size)
 
+    def _declare_srgb(self, pdf, result: Result) -> None:
+        """Tag ``pdf`` as sRGB, recording a failure on ``result`` rather than
+        raising: an undeclared file beats none."""
+        try:
+            tag_srgb(pdf)
+            result.srgb_tagged = True
+        except Exception as exc:
+            result.srgb_skipped = str(exc) or type(exc).__name__
+            self._log(f"  sRGB declaration skipped: {result.srgb_skipped}")
+
+    def declare_srgb(self, in_path, out_path) -> Result:
+        """Write ``in_path`` to ``out_path`` with only the sRGB declaration added.
+
+        Lossless: no image is touched, nothing is pruned or deduplicated, and
+        existing streams keep their encoding. For callers that want the colour
+        fix without compression.
+        """
+        result = Result(
+            input_path=str(in_path),
+            output_path=str(out_path),
+            before_bytes=os.path.getsize(in_path),
+            after_bytes=0,
+        )
+        with pikepdf.open(in_path) as pdf:
+            self._declare_srgb(pdf, result)
+            pdf.save(out_path)
+        result.after_bytes = os.path.getsize(out_path)
+        return result
+
     def optimize_document(self, in_path, out_path, profile: Profile | None = None) -> Result:
         """Optimize ``in_path`` into ``out_path``. Returns a :class:`Result`."""
         profile = profile or Web()
@@ -209,13 +238,8 @@ class Optimizer:
         if profile.declare_srgb:
             # After prune, so remove_output_intents cannot strip the intent
             # just added; before dedupe, so it merges with an identical
-            # profile already in the file. An undeclared export beats none.
-            try:
-                tag_srgb(pdf)
-                result.srgb_tagged = True
-            except Exception as exc:
-                result.srgb_skipped = str(exc) or type(exc).__name__
-                self._log(f"  sRGB declaration skipped: {result.srgb_skipped}")
+            # profile already in the file.
+            self._declare_srgb(pdf, result)
         result.merged_objects = dedupe(pdf)
         if result.merged_objects:
             self._log(f"  deduplicated {result.merged_objects} redundant objects")
@@ -237,3 +261,8 @@ def optimize_document(
 ) -> Result:
     """Convenience wrapper around :class:`Optimizer`."""
     return Optimizer(verbose=verbose).optimize_document(in_path, out_path, profile)
+
+
+def declare_srgb(in_path, out_path, verbose: bool = False) -> Result:
+    """Convenience wrapper around :meth:`Optimizer.declare_srgb`."""
+    return Optimizer(verbose=verbose).declare_srgb(in_path, out_path)
