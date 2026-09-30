@@ -16,6 +16,13 @@ __all__ = [
 ]
 
 
+def _positive_int(text: str) -> int:
+    n = int(text)
+    if n < 1:
+        raise argparse.ArgumentTypeError("must be at least 1")
+    return n
+
+
 def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(
         prog="pdf-diet",
@@ -70,6 +77,14 @@ def build_parser() -> argparse.ArgumentParser:
         "re-encoded, so the output is lossless",
     )
     ap.add_argument(
+        "-j",
+        "--jobs",
+        type=_positive_int,
+        default=None,
+        metavar="N",
+        help="processes encoding images (default: one per usable CPU; 1 = no subprocesses)",
+    )
+    ap.add_argument(
         "-v", "--verbose", action="store_true", help="report what happens to each image"
     )
     ap.add_argument("--version", action="version", version=f"pdf-diet {__version__}")
@@ -107,7 +122,9 @@ def main(argv: list[str] | None = None) -> int:
         profile.declare_srgb = True
 
     try:
-        result = optimize_document(args.input, out, profile, verbose=args.verbose)
+        result = optimize_document(
+            args.input, out, profile, verbose=args.verbose, workers=args.jobs
+        )
     except Exception as exc:  # pragma: no cover
         print(f"pdf-diet: failed to optimize {args.input}: {exc}", file=sys.stderr)
         return 1
@@ -123,6 +140,7 @@ _COMPRESSION_OPTIONS = {
     "dpi": "--dpi",
     "no_crop": "--no-crop",
     "progressive": "--progressive",
+    "jobs": "--jobs",
 }
 
 

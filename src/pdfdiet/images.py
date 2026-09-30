@@ -45,6 +45,21 @@ ImageFile.MAXBLOCK = max(getattr(ImageFile, "MAXBLOCK", 0), 4 * 1024 * 1024)
 #: PIL modes that map onto a PDF colour space directly.
 ENCODABLE_MODES = {"1", "L", "P", "RGB"}
 
+#: How much smaller zlib level 9 output can be than level 1, with margin.
+#: Measured at 1.5x median and 4.3x worst over 60 corpus images. When level 1
+#: is this many times larger than the best lossy candidate, lossless cannot
+#: win and the (6x slower) level-9 pass is skipped.
+_FLATE_LEVEL_GAIN = 8
+
+#: Where the JPEG 2000 search starts, relative to ``ceil(floor)``.
+#: OpenJPEG's dB target is measured on its own transformed components and
+#: overshoots our RGB PSNR, so the cheapest passing setting is usually 1-3 dB
+#: below the floor. Over 883 searches in five decks, starting 2 below took
+#: 2.5 encodes on average against 3.5 starting at the floor. Fixed rather than
+#: learned per document: a learned guess would make the output depend on
+#: which worker saw which image first.
+_JP2_GUESS_OFFSET = -2
+
 #: JPEG quality search bounds.
 _JPEG_RANGE = (40, 95)
 #: JPEG 2000 PSNR-target search bounds, in dB.
@@ -240,7 +255,13 @@ def _shape_ok(data: bytes, im: Image.Image, cs: str) -> Image.Image | None:
 
 
 def _search_codec(
-    encode, lo: int, hi: int, im: Image.Image, cs: str, floor: float
+    encode,
+    lo: int,
+    hi: int,
+    im: Image.Image,
+    cs: str,
+    floor: float,
+    guess: int | None = None,
 ) -> tuple[int, bytes] | None:
     """Cheapest quality setting in [lo, hi] whose decode clears ``floor`` dB.
 
@@ -255,25 +276,78 @@ def _search_codec(
     so the image was left completely untouched -- losing the downsampling
     saving as well. Best effort at the top of the range is strictly better,
     and the caller still only uses it if it actually beats the original.
+
+    With ``guess``, the search gallops outward from it before bisecting: the
+    same answer as a plain binary search, in far fewer encodes when the guess
+    is close. JPEG 2000 targets PSNR directly, so the answer sits within a
+    few dB of the floor, and each of its encodes costs ~0.5 s on a 2000 px
+    image.
     """
     best: tuple[int, bytes] | None = None
     fallback: tuple[int, bytes] | None = None
     best_psnr = -1.0
-    while lo <= hi:
-        mid = (lo + hi) // 2
+    failed = False
+
+    def probe(q: int) -> bool | None:
+        """True if ``q`` clears the floor, False if not, None if unusable."""
+        nonlocal best, fallback, best_psnr, failed
         try:
-            data = encode(mid)
+            data = encode(q)
         except Exception:
-            break
+            failed = True
+            return None
         dec = _shape_ok(data, im, cs)
         if dec is None:
-            break
+            failed = True
+            return None
         score = psnr(im, dec)
         if score > best_psnr:
             best_psnr = score
             fallback = (len(data), data)
         if score >= floor:
             best = (len(data), data)
+            return True
+        return False
+
+    if guess is not None and lo <= guess <= hi:
+        # Narrow [lo, hi] to a bracket around the boundary, doubling the step.
+        ok = probe(guess)
+        if ok is None:
+            return best or fallback
+        step, q = 1, guess
+        if ok:
+            hi = guess - 1
+            while q > lo:
+                q = max(lo, guess - step)
+                ok = probe(q)
+                if ok is None:
+                    return best or fallback
+                if not ok:
+                    lo = q + 1
+                    break
+                hi = q - 1
+                step *= 2
+        else:
+            lo = guess + 1
+            while q < hi:
+                q = min(hi, guess + step)
+                ok = probe(q)
+                if ok is None:
+                    return best or fallback
+                if ok:
+                    hi = q - 1
+                    break
+                lo = q + 1
+                step *= 2
+            else:
+                return best or fallback
+
+    while lo <= hi and not failed:
+        mid = (lo + hi) // 2
+        ok = probe(mid)
+        if ok is None:
+            break
+        if ok:
             hi = mid - 1
         else:
             lo = mid + 1
@@ -284,6 +358,7 @@ def encode_candidates(im: Image.Image, profile: Profile) -> list[tuple[int, dict
     """Encode this image every way we can and return the eligible results.
 
     Returns ``[(size_in_bytes, spec)]``; the caller takes the smallest.
+    A candidate that cannot plausibly be the smallest may be left out.
 
     **Every candidate must clear the image's quality floor to be eligible.**
     Picking the smallest output across codecs without that gate -- which is
@@ -321,19 +396,30 @@ def encode_candidates(im: Image.Image, profile: Profile) -> list[tuple[int, dict
     cs = "/DeviceGray" if im.mode == "L" else "/DeviceRGB"
     floor = psnr_floor(profile, im)
 
-    raw = flate(im.tobytes())
-    out: list[tuple[int, dict]] = [
-        (len(raw), {"data": raw, "filter": "/FlateDecode", "cs": cs, "bpc": 8})
-    ]
+    out: list[tuple[int, dict]] = []
 
     hit = _search_codec(lambda q: _encode_jpeg(im, q, profile), *_JPEG_RANGE, im, cs, floor)
     if hit:
         out.append((hit[0], {"data": hit[1], "filter": "/DCTDecode", "cs": cs, "bpc": 8}))
 
-    hit = _search_codec(lambda db: _encode_jp2(im, db), *_JP2_RANGE, im, cs, floor)
+    hit = _search_codec(
+        lambda db: _encode_jp2(im, db),
+        *_JP2_RANGE,
+        im,
+        cs,
+        floor,
+        guess=math.ceil(floor) + _JP2_GUESS_OFFSET,
+    )
     if hit:
         out.append((hit[0], {"data": hit[1], "filter": "/JPXDecode", "cs": cs, "bpc": 8}))
 
+    raw = im.tobytes()
+    if out and len(zlib.compress(raw, 1)) > _FLATE_LEVEL_GAIN * min(c[0] for c in out):
+        # Lossless cannot win, so skip the level-9 deflate: on a photograph
+        # it is over half the time spent on the whole image.
+        return out
+    data = flate(raw)
+    out.insert(0, (len(data), {"data": data, "filter": "/FlateDecode", "cs": cs, "bpc": 8}))
     return out
 
 

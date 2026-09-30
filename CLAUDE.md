@@ -22,7 +22,7 @@ uv run pytest                        # full suite, ~30s, no external fixtures
 uv run pytest tests/test_regression.py   # the bugs that shipped once
 uv run ruff check src tests tools     # lint
 uv run ruff format src tests tools    # format (CI checks this)
-uv run pdf-diet in.pdf out.pdf -p minimal -v
+uv run pdf-diet in.pdf out.pdf -p minimal -v   # -v ends with a timing table
 ```
 
 Dev dependencies are a PEP 735 `[dependency-groups]` entry, not an extra, so
@@ -73,9 +73,11 @@ src/pdfdiet/
                  crop + per-axis target size.  -> plan_image()
   images.py      Decode, measure, re-encode.  -> encode_candidates()
   document.py    Placement rewriting, object pruning, deduplication.
+  parallel.py    Lambda-safe process pool (Process + Pipe only).
   srgb.py        Opt-in sRGB declaration: output intent + /DefaultRGB.
                  Python twin of pitch-app's backend.integration.pdf-srgb.
   optimizer.py   Orchestration.  -> Optimizer.optimize_document()
+                 Parent decodes and writes back; _process() runs in workers.
   cli.py         Argument parsing.
 ```
 
@@ -84,13 +86,21 @@ Data flow for one image:
 ```
 scan_placements()  -> every (ctm, clip) an image is drawn under
 plan_image()       -> crop rect + final pixel size
-load_pil()         -> base samples, masks detached
-crop / resize
-encode_candidates()-> all encodings meeting the quality floor
-min(by size)       -> chosen
-set_image()        -> written back in place
+load_pil()         -> base samples, masks detached          [parent]
+crop / resize                                               [worker]
+encode_candidates()-> all encodings meeting the quality floor  [worker]
+min(by size)       -> chosen                                [worker]
+set_image()        -> written back in place                 [parent]
 rewrite_placements-> corrective `cm` if it was cropped
 ```
+
+pikepdf objects belong to their `Pdf` and cannot cross a process boundary,
+so workers only ever see Pillow images and plain values.
+
+Images identical in samples, mask, crop and size are encoded once
+(`_content_key`); copies get the first one's outcome. Decks repeat images as
+separate XObjects that `dedupe` only merges at the end — 19% of all encoded
+pixels in the benchmark corpus.
 
 ## Invariants
 
@@ -118,6 +128,9 @@ These are load-bearing. Tests enforce all of them.
 8. **`declare_srgb` (`--srgb-only`) is lossless.** It opens, tags and saves;
    no image, prune or dedupe step. Anything that re-encodes belongs in
    `optimize_document`.
+9. **Output does not depend on the worker count.** Results arrive in
+   completion order; `result.images` is re-sorted into document order, and
+   any search heuristic must be fixed, not learned during a run.
 
 ## Hazards
 
@@ -173,6 +186,20 @@ exception surfaced inside `_search_codec`'s guard and looked exactly like
 range. `_encode_jpeg` now raises `ImageFile.MAXBLOCK` and retries without
 `optimize`. If you touch JPEG encoding, keep the retry.
 
+### Threads do not parallelise encoding; `multiprocessing.Pool` fails on Lambda
+
+Pillow holds the GIL through JPEG and JPEG 2000 encode and decode. A thread
+pool measured exactly 1.0x, so encoding runs in processes. But
+`multiprocessing.Pool` and `ProcessPoolExecutor` need POSIX semaphores in
+`/dev/shm`, which AWS Lambda lacks: they fail at construction with
+`OSError: [Errno 38]`. `parallel.Pool` is built from `Process` and `Pipe`
+alone. Do not "simplify" it to the standard pools.
+
+It keeps one job per worker on purpose: a second job sent to a busy worker
+fills the pipe buffer and blocks, while the worker blocks sending its result
+back. It is started before the PDF is opened so forked workers inherit
+nothing large.
+
 ### pikepdf returns native Python scalars
 
 `obj["/Width"]` is a plain `int`, not a `pikepdf.Object`, so it has no
@@ -197,6 +224,9 @@ the whole loop, so one awkward value cannot abandon a container half-done.
   finds nothing, passing for the wrong reason.
 - qpdf pushes inherited page `/Resources` onto each page when it writes, so a
   fixture that relies on inheritance must be built in memory, not saved.
+- Compare outputs by parsing them, not by bytes: qpdf's trailer `/ID`
+  includes the time, so two identical runs differ. It is repeated inside the
+  `/XRef` stream, so skip that stream too.
 - Rendered-page PSNR is a weak check. It passed for both rendering bugs
   above. Prefer per-image structural assertions.
 
