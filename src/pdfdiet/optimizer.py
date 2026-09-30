@@ -3,6 +3,8 @@
 """The top-level optimization pass."""
 
 import os
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 import pikepdf
@@ -35,6 +37,8 @@ class ImageResult:
     after_bytes: int
     filter: str
     cropped: bool
+    #: Wall-clock seconds spent on this image, decode to write-back.
+    seconds: float = 0.0
 
 
 @dataclass
@@ -50,6 +54,27 @@ class Result:
     srgb_tagged: bool = False
     #: Why ``declare_srgb`` was requested but not applied, else None.
     srgb_skipped: str | None = None
+    #: Wall-clock seconds per phase, in the order the phases first ran.
+    #: Phases entered repeatedly (``decode``, ``encode``, ...) accumulate.
+    timings: dict[str, float] = field(default_factory=dict)
+
+    @contextmanager
+    def timed(self, phase: str):
+        """Add the time spent inside the block to ``timings[phase]``."""
+        t0 = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.timings[phase] = self.timings.get(phase, 0.0) + time.perf_counter() - t0
+
+    def timing_report(self) -> str:
+        total = sum(self.timings.values())
+        lines = ["  timings:"]
+        for phase, secs in self.timings.items():
+            share = 100 * secs / total if total else 0.0
+            lines.append(f"    {phase:<10} {secs:>8.3f}s {share:>5.1f}%")
+        lines.append(f"    {'total':<10} {total:>8.3f}s")
+        return "\n".join(lines)
 
     @property
     def ratio(self) -> float:
@@ -140,28 +165,36 @@ class Optimizer:
             before_bytes=os.path.getsize(in_path),
             after_bytes=0,
         )
-        with pikepdf.open(in_path) as pdf:
-            self._declare_srgb(pdf, result)
-            pdf.save(out_path)
+        with result.timed("open"):
+            pdf = pikepdf.open(in_path)
+        with pdf:
+            with result.timed("srgb"):
+                self._declare_srgb(pdf, result)
+            with result.timed("save"):
+                pdf.save(out_path)
         result.after_bytes = os.path.getsize(out_path)
+        self._log(result.timing_report())
         return result
 
     def optimize_document(self, in_path, out_path, profile: Profile | None = None) -> Result:
         """Optimize ``in_path`` into ``out_path``. Returns a :class:`Result`."""
         profile = profile or Web()
-        before_bytes = os.path.getsize(in_path)
-        pdf = pikepdf.open(in_path)
         result = Result(
             input_path=str(in_path),
             output_path=str(out_path),
-            before_bytes=before_bytes,
+            before_bytes=os.path.getsize(in_path),
             after_bytes=0,
         )
+        with result.timed("open"):
+            pdf = pikepdf.open(in_path)
 
-        placements = scan_placements(pdf)
+        with result.timed("scan"):
+            placements = scan_placements(pdf)
         adjust: dict[tuple, tuple] = {}
+        self._log(f"  {len(placements)} image XObjects placed")
 
         for objgen, ps in placements.items():
+            t_image = time.perf_counter()
             try:
                 xobj = pdf.get_object(objgen)
                 before = len(xobj.read_raw_bytes())
@@ -172,48 +205,63 @@ class Optimizer:
             if plan is None:
                 continue
 
-            im = load_pil(xobj)
+            with result.timed("decode"):
+                im = load_pil(xobj)
+                smask_obj = xobj.get("/SMask")
+                smask_im = load_pil(smask_obj) if smask_obj is not None else None
             if im is None:
                 continue
 
-            smask_obj = xobj.get("/SMask")
-            smask_im = load_pil(smask_obj) if smask_obj is not None else None
-
-            if plan.crop:
-                im = im.crop(plan.crop)
-                if smask_im is not None:
-                    # The soft mask may have its own resolution.
-                    sx = smask_im.width / ps[0].px[0]
-                    sy = smask_im.height / ps[0].px[1]
-                    smask_im = smask_im.crop(
-                        (
-                            int(plan.crop[0] * sx),
-                            int(plan.crop[1] * sy),
-                            max(1, int(plan.crop[2] * sx)),
-                            max(1, int(plan.crop[3] * sy)),
+            with result.timed("prepare"):
+                if plan.crop:
+                    im = im.crop(plan.crop)
+                    if smask_im is not None:
+                        # The soft mask may have its own resolution.
+                        sx = smask_im.width / ps[0].px[0]
+                        sy = smask_im.height / ps[0].px[1]
+                        smask_im = smask_im.crop(
+                            (
+                                int(plan.crop[0] * sx),
+                                int(plan.crop[1] * sy),
+                                max(1, int(plan.crop[2] * sx)),
+                                max(1, int(plan.crop[3] * sy)),
+                            )
                         )
-                    )
-            if (im.width, im.height) != plan.size:
-                im = im.resize(plan.size, Image.LANCZOS)
-            if smask_im is not None and (smask_im.width, smask_im.height) != plan.size:
-                smask_im = smask_im.resize(plan.size, Image.LANCZOS)
+                if (im.width, im.height) != plan.size:
+                    im = im.resize(plan.size, Image.LANCZOS)
+                if smask_im is not None and (smask_im.width, smask_im.height) != plan.size:
+                    smask_im = smask_im.resize(plan.size, Image.LANCZOS)
+                im = normalize_mode(im)
+                if profile.reduce_color_complexity:
+                    im = reduce_complexity(im)
 
             if smask_im is not None:
-                self._handle_soft_mask(pdf, xobj, smask_obj, smask_im, plan, profile)
+                with result.timed("mask"):
+                    self._handle_soft_mask(pdf, xobj, smask_obj, smask_im, plan, profile)
 
-            im = normalize_mode(im)
-            if profile.reduce_color_complexity:
-                im = reduce_complexity(im)
-
-            cands = encode_candidates(im, profile)
+            with result.timed("encode"):
+                cands = encode_candidates(im, profile)
             if not cands:
+                self._log(
+                    f"  {ps[0].px[0]}x{ps[0].px[1]} kept, no candidate "
+                    f"{time.perf_counter() - t_image:.2f}s"
+                )
                 continue
             size, spec = min(cands, key=lambda c: c[0])
 
             if size >= before:
-                continue  # recompression would not help
+                # Recompression would not help. Logged anyway: the encode
+                # time was spent all the same.
+                self._log(
+                    f"  {ps[0].px[0]}x{ps[0].px[1]} kept, best "
+                    f"{spec['filter']:<12} {before / 1024:>9.1f}K <= {size / 1024:>8.1f}K "
+                    f"{time.perf_counter() - t_image:>7.2f}s"
+                )
+                continue
 
-            set_image(xobj, pdf, spec, plan.size)
+            with result.timed("write"):
+                set_image(xobj, pdf, spec, plan.size)
+            seconds = time.perf_counter() - t_image
             if plan.uv:
                 adjust[objgen] = adjust_matrix(plan.uv)
             result.images.append(
@@ -225,34 +273,42 @@ class Optimizer:
                     after_bytes=size,
                     filter=spec["filter"],
                     cropped=plan.crop is not None,
+                    seconds=seconds,
                 )
             )
             self._log(
                 f"  {ps[0].px[0]}x{ps[0].px[1]} -> "
                 f"{plan.size[0]}x{plan.size[1]} {spec['filter']:<12} "
-                f"{before / 1024:>9.1f}K -> {size / 1024:>8.1f}K"
+                f"{before / 1024:>9.1f}K -> {size / 1024:>8.1f}K {seconds:>7.2f}s"
             )
 
-        rewrite_placements(pdf, adjust)
-        prune(pdf, profile.removal)
+        with result.timed("rewrite"):
+            rewrite_placements(pdf, adjust)
+        with result.timed("prune"):
+            prune(pdf, profile.removal)
         if profile.declare_srgb:
             # After prune, so remove_output_intents cannot strip the intent
             # just added; before dedupe, so it merges with an identical
             # profile already in the file.
-            self._declare_srgb(pdf, result)
-        result.merged_objects = dedupe(pdf)
+            with result.timed("srgb"):
+                self._declare_srgb(pdf, result)
+        with result.timed("dedupe"):
+            result.merged_objects = dedupe(pdf)
         if result.merged_objects:
             self._log(f"  deduplicated {result.merged_objects} redundant objects")
 
-        pdf.save(
-            out_path,
-            compress_streams=True,
-            object_stream_mode=pikepdf.ObjectStreamMode.generate,
-            linearize=False,
-            recompress_flate=True,
-            stream_decode_level=pikepdf.StreamDecodeLevel.generalized,
-        )
+        with result.timed("save"):
+            pdf.save(
+                out_path,
+                compress_streams=True,
+                object_stream_mode=pikepdf.ObjectStreamMode.generate,
+                linearize=False,
+                recompress_flate=True,
+                stream_decode_level=pikepdf.StreamDecodeLevel.generalized,
+            )
+        pdf.close()
         result.after_bytes = os.path.getsize(out_path)
+        self._log(result.timing_report())
         return result
 
 

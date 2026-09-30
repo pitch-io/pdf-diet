@@ -68,6 +68,12 @@ class TestRoundTrip:
         assert img.after_bytes < img.before_bytes
         assert img.filter.startswith("/")
 
+    def test_result_records_phase_timings(self, gradient_pdf, tmp_path) -> None:
+        result = optimize_document(gradient_pdf, tmp_path / "o.pdf", Web())
+        for phase in ("open", "scan", "decode", "encode", "prune", "dedupe", "save"):
+            assert result.timings[phase] >= 0.0
+        assert all(im.seconds > 0.0 for im in result.images)
+
     def test_repeated_runs_are_stable(self, gradient_pdf, tmp_path) -> None:
         """Optimizing twice must not keep degrading the document."""
         once = tmp_path / "1.pdf"
@@ -161,6 +167,20 @@ class TestCli:
         expected = os.path.splitext(gradient_pdf)[0] + ".optimized.pdf"
         assert os.path.exists(expected)
         assert "smaller" in capsys.readouterr().out
+
+    def test_verbose_prints_timings(
+        self, gradient_pdf: Path, tmp_path: Path, capsys: CaptureFixture[str]
+    ) -> None:
+        assert main([str(gradient_pdf), str(tmp_path / "o.pdf"), "-v"]) == 0
+        out = capsys.readouterr().out
+        assert "timings:" in out
+        assert "encode" in out
+
+    def test_quiet_prints_no_timings(
+        self, gradient_pdf: Path, tmp_path: Path, capsys: CaptureFixture[str]
+    ) -> None:
+        assert main([str(gradient_pdf), str(tmp_path / "o.pdf")]) == 0
+        assert "timings:" not in capsys.readouterr().out
 
     def test_explicit_profile_and_quality(self, gradient_pdf: Path, tmp_path: Path) -> None:
         out = str(tmp_path / "o.pdf")
