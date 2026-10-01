@@ -18,10 +18,10 @@ from pikepdf import Dictionary, Name
 from PIL import Image, ImageStat
 from pytest import FixtureRequest
 
-from conftest import PAGE_H, PAGE_W, gradient_image
+from conftest import PAGE_H, PAGE_W, build_pdf, faint_circle_image, gradient_image
 from pdfdiet import MinimalFileSize, Web, optimize_document
 from pdfdiet.document import dedupe
-from pdfdiet.images import encode_candidates, load_pil, psnr, psnr_floor
+from pdfdiet.images import content_mask, encode_candidates, load_pil, psnr, psnr_floor
 
 
 def _decoded_images(path: Path) -> list[tuple[str, Image.Image, tuple[int, int]]]:
@@ -134,6 +134,59 @@ class TestNoBanding:
         assert chosen > len(cheap_bytes), (
             "optimizer picked an encoding at or below the banding threshold"
         )
+
+
+class TestFaintShapes:
+    """A pale circle on white came back blurred and mottled.
+
+    It was 8 grey levels off its background. JPEG 2000 encoded it into
+    1.1 KB that scored 48.4 dB against a 48 dB floor, with edge pixels off by
+    up to 12 -- more than the whole contrast of the edge. Whole-image PSNR
+    averaged that error over a background that every codec reproduces
+    exactly. The fix measures error over ``content_mask`` as well.
+    """
+
+    def test_edge_clears_the_floor(self) -> None:
+        im = faint_circle_image()
+        mask = content_mask(im)
+        floor = psnr_floor(Web(), im, mask)
+        for _size, spec in encode_candidates(im, Web()):
+            if spec["filter"] == "/FlateDecode":
+                continue
+            dec = Image.open(io.BytesIO(spec["data"]))
+            dec.load()
+            measured = psnr(im, dec, mask)
+            assert measured >= floor - 0.01, (
+                f"{spec['filter']} scores {psnr(im, dec):.1f} dB overall but "
+                f"{measured:.1f} dB where there is anything to see"
+            )
+
+    def test_whole_image_psnr_alone_misses_it(self) -> None:
+        """Keeps the fixture honest: the cheap encoding must still fool PSNR."""
+        im = faint_circle_image()
+        cheap = io.BytesIO()
+        im.save(
+            cheap, format="JPEG2000", quality_mode="dB", quality_layers=[48.0], irreversible=True
+        )
+        dec = Image.open(io.BytesIO(cheap.getvalue()))
+        dec.load()
+        floor = psnr_floor(Web(), im)
+        assert psnr(im, dec) >= floor - 1.0
+        assert psnr(im, dec, content_mask(im)) < floor - 5.0
+
+    def test_round_trip_keeps_the_edge(self, tmp_path: Path) -> None:
+        src = faint_circle_image()
+        # Drawn at under 100 DPI so nothing is downsampled.
+        pdf = build_pdf(tmp_path / "in.pdf", [(src, (360, 345, 20, 20), None, None)])
+        out = tmp_path / "out.pdf"
+        optimize_document(pdf, out, Web())
+
+        _cs, got, size = _decoded_images(out)[0]
+        assert size == src.size
+        mask = content_mask(src)
+        floor = psnr_floor(Web(), src, mask)
+        measured = psnr(src, got.convert("RGB"), mask)
+        assert measured >= floor - 0.01, f"edge came back at {measured:.1f} dB"
 
 
 class TestDedupe:

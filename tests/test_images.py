@@ -3,19 +3,21 @@
 """Decoding, quality assessment and codec selection."""
 
 import io
+import zlib
 from pathlib import Path
 
 import pikepdf
 import pytest
 from PIL import Image
 
-from conftest import flat_image, gradient_image, noisy_image
+from conftest import faint_circle_image, flat_image, gradient_image, noisy_image
 from pdfdiet import images
 from pdfdiet.images import (
     _JP2_RANGE,
     PSNR_FLOOR_CEILING,
     _encode_jp2,
     _search_codec,
+    content_mask,
     detail,
     encode_candidates,
     load_pil,
@@ -23,6 +25,7 @@ from pdfdiet.images import (
     psnr,
     psnr_floor,
     reduce_complexity,
+    set_image,
 )
 from pdfdiet.profiles import Web
 
@@ -107,6 +110,90 @@ class TestMetrics:
         high.compression_quality = 0.95
         im = noisy_image(128, 128)
         assert psnr_floor(high, im) > psnr_floor(low, im)
+
+
+class TestContentMask:
+    """Where error is measured, so a flat background cannot dilute it."""
+
+    def test_busy_image_needs_no_mask(self) -> None:
+        assert content_mask(noisy_image(128, 128)) is None
+
+    def test_flat_image_has_no_content(self) -> None:
+        mask = content_mask(flat_image(64, 64))
+        assert mask is not None
+        assert mask.getextrema() == (0, 0)
+
+    def test_mask_reaches_a_fixed_distance_round_a_change(self) -> None:
+        im = Image.new("RGB", (64, 64), (255, 255, 255))
+        im.putpixel((32, 32), (250, 255, 255))
+        mask = content_mask(im)
+        assert mask is not None
+        # The dot differs from its left and upper neighbours too, so the
+        # changes span 31..32; reach 8 on each side.
+        assert mask.getbbox() == (23, 23, 41, 41)
+        assert mask.getextrema() == (0, 255)
+
+    def test_faint_shape_masks_its_edge_not_its_fill(self) -> None:
+        im = faint_circle_image()
+        mask = content_mask(im)
+        assert mask is not None
+        w, h = im.size
+        assert mask.getpixel((0, 0)) == 0, "white background is flat"
+        assert mask.getpixel((w // 2, h // 2)) == 0, "the disc's fill is flat"
+        left_edge = next(x for x in range(w) if im.getpixel((x, h // 2)) != (255, 255, 255))
+        assert mask.getpixel((left_edge, h // 2)) == 255
+
+    def test_masked_psnr_ignores_pixels_outside_the_mask(self) -> None:
+        im = faint_circle_image(200, 200)
+        mask = content_mask(im)
+        damaged = im.copy()
+        damaged.putpixel((0, 0), (0, 0, 0))
+        assert psnr(im, damaged) < 99.0
+        assert psnr(im, damaged, mask) == 99.0
+
+    def test_detail_over_the_mask_ignores_a_flat_background(self) -> None:
+        """A photograph on white read as a third of its detail.
+
+        Its floor then came out as if it were a flat graphic, while its
+        error is measured over the photograph alone.
+        """
+        photo = noisy_image(128, 128)
+        slide = Image.new("RGB", (512, 512), (255, 255, 255))
+        slide.paste(photo, (192, 192))
+        mask = content_mask(slide)
+        assert detail(slide) < detail(photo) / 4
+        assert detail(slide, mask) == pytest.approx(detail(photo), rel=0.3)
+
+
+class TestDeflatedJpeg:
+    """JPEG wrapped in /FlateDecode, as Pdftools writes it."""
+
+    def test_flat_heavy_jpeg_is_deflated(self) -> None:
+        im = faint_circle_image()
+        jpegs = [s for _n, s in encode_candidates(im, Web()) if s["filter"] == "/DCTDecode"]
+        assert jpegs
+        for spec in jpegs:
+            assert "deflated" in spec
+            assert zlib.decompress(spec["deflated"]) == spec["data"]
+
+    def test_size_counts_what_is_written(self) -> None:
+        for im in (faint_circle_image(), noisy_image(128, 128)):
+            for size, spec in encode_candidates(im, Web()):
+                assert size == len(spec.get("deflated", spec["data"]))
+
+    def test_written_stream_decodes_to_the_jpeg(self) -> None:
+        im = faint_circle_image(200, 200)
+        spec = next(s for _n, s in encode_candidates(im, Web()) if s["filter"] == "/DCTDecode")
+        assert "deflated" in spec
+        pdf = pikepdf.new()
+        xobj = pdf.make_stream(b"")
+        xobj.Type, xobj.Subtype = pikepdf.Name.XObject, pikepdf.Name.Image
+        set_image(xobj, pdf, spec, im.size)
+        assert list(xobj.Filter) == [pikepdf.Name.FlateDecode, pikepdf.Name.DCTDecode]
+        got = load_pil(xobj)
+        assert got is not None
+        want = Image.open(io.BytesIO(spec["data"]))
+        assert psnr(want, got) == 99.0
 
 
 class TestReduceComplexity:
