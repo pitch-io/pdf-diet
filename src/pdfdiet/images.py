@@ -20,6 +20,7 @@ from .profiles import Profile
 __all__ = [
     "ENCODABLE_MODES",
     "PSNR_FLOOR_CEILING",
+    "content_mask",
     "detail",
     "encode_candidates",
     "flate",
@@ -76,12 +77,15 @@ def flate(data: bytes) -> bytes:
 # --------------------------------------------------------------------------
 
 
-def psnr(ref: Image.Image, got: Image.Image) -> float:
-    """Peak signal-to-noise ratio in dB. 99.0 means identical."""
+def psnr(ref: Image.Image, got: Image.Image, mask: Image.Image | None = None) -> float:
+    """Peak signal-to-noise ratio in dB. 99.0 means identical.
+
+    With ``mask`` (mode "L"), only pixels where it is non-zero are counted.
+    """
     a, b = ref.convert("RGB"), got.convert("RGB")
     if a.size != b.size:
         return 0.0
-    hist = ImageChops.difference(a, b).histogram()
+    hist = ImageChops.difference(a, b).histogram(mask)
     total = count = 0
     for ch in range(3):
         base = ch * 256
@@ -93,14 +97,70 @@ def psnr(ref: Image.Image, got: Image.Image) -> float:
     return 99.0 if mse == 0 else 10.0 * math.log10(255.0 * 255.0 / mse)
 
 
-def detail(im: Image.Image) -> float:
-    """Mean local high-frequency energy.
+#: How far, in pixels, the content mask reaches beyond the nearest variation
+#: in the source. Wide enough to take in codec ringing and blur around an
+#: edge; an edge's error is spread over about twice this.
+_CONTENT_REACH = 8
+
+
+def _dilution(mask: Image.Image | None) -> float:
+    """dB by which whole-image PSNR overstates PSNR over ``mask``.
+
+    Exact when all the error falls inside the mask, which is roughly where a
+    codec puts it. Used only to aim the JPEG 2000 search: starting from the
+    bare floor, a slide with 13% content took 8.6 encodes per image instead
+    of 3.4, and a deck's encode time doubled.
+    """
+    if mask is None:
+        return 0.0
+    coverage = ImageStat.Stat(mask).mean[0] / 255.0
+    return -10.0 * math.log10(max(coverage, 0.01))
+
+
+def content_mask(im: Image.Image) -> Image.Image | None:
+    """Where ``im`` has anything to show: pixels near any change in value.
+
+    Returns a mode "L" mask, non-zero within :data:`_CONTENT_REACH` of a
+    pixel that differs from its right or lower neighbour, or ``None`` when
+    that is every pixel and the mask would change nothing.
+
+    Whole-image PSNR averages error over every pixel, and exactly flat
+    regions -- a slide's white background -- come back from any codec nearly
+    perfect. On a faint shape on white they dilute the error at its edge out
+    of sight: a circle 8 grey levels off its background was blurred and
+    mottled into a 1.1 KB JPEG 2000 that scored 48.4 dB against a 48 dB floor,
+    while its edge pixels were off by up to 12. Measured over this mask the
+    same encoding scores 40 dB.
+    """
+    w, h = im.size
+    if w < 2 or h < 2:
+        return None
+    edge = Image.new("L", im.size, 0)
+    for band in im.split():
+        dx = ImageChops.difference(band.crop((1, 0, w, h)), band.crop((0, 0, w - 1, h)))
+        dy = ImageChops.difference(band.crop((0, 1, w, h)), band.crop((0, 0, w, h - 1)))
+        for d in (dx, dy):
+            tile = Image.new("L", im.size, 0)
+            tile.paste(d, (0, 0))
+            edge = ImageChops.lighter(edge, tile)
+    edge = edge.point(lambda v: 255 if v else 0)
+    # A box blur reaches exactly `radius` pixels and rounds a lone hit up to
+    # 1 at that radius, so thresholding it is a cheap square dilation.
+    mask = edge.filter(ImageFilter.BoxBlur(_CONTENT_REACH)).point(lambda v: 255 if v else 0)
+    return None if mask.getextrema()[0] == 255 else mask
+
+
+def detail(im: Image.Image, mask: Image.Image | None = None) -> float:
+    """Mean local high-frequency energy, over ``mask`` if given.
 
     Around 0.06 for a smooth gradient, around 10-12 for a photograph. Used to
-    decide how much fidelity an image needs.
+    decide how much fidelity an image needs. Measure it over the same pixels
+    the error is: averaged over a flat background too, a photograph on white
+    reads as a third of its real detail and gets a floor meant for graphics.
     """
     g = im.convert("L")
-    return ImageStat.Stat(ImageChops.difference(g, g.filter(ImageFilter.GaussianBlur(2)))).mean[0]
+    hf = ImageChops.difference(g, g.filter(ImageFilter.GaussianBlur(2)))
+    return ImageStat.Stat(hf, mask).mean[0]
 
 
 #: Absolute ceiling on the per-image quality floor, in dB.
@@ -114,7 +174,7 @@ def detail(im: Image.Image) -> float:
 PSNR_FLOOR_CEILING = 48.0
 
 
-def psnr_floor(profile: Profile, im: Image.Image) -> float:
+def psnr_floor(profile: Profile, im: Image.Image, mask: Image.Image | None = None) -> float:
     """How much fidelity this particular image needs, in dB.
 
     **Do not replace this with a constant.** How much distortion an image can
@@ -128,7 +188,7 @@ def psnr_floor(profile: Profile, im: Image.Image) -> float:
     fidelity is not visible and is very expensive.
     """
     q = max(0.0, min(1.0, profile.compression_quality))
-    adaptive = 18.0 + 22.0 * q + min(18.0, 12.0 / (0.3 + detail(im)))
+    adaptive = 18.0 + 22.0 * q + min(18.0, 12.0 / (0.3 + detail(im, mask)))
     return min(adaptive, PSNR_FLOOR_CEILING)
 
 
@@ -262,8 +322,12 @@ def _search_codec(
     cs: str,
     floor: float,
     guess: int | None = None,
+    mask: Image.Image | None = None,
 ) -> tuple[int, bytes] | None:
     """Cheapest quality setting in [lo, hi] whose decode clears ``floor`` dB.
+
+    With ``mask``, a decode must clear the floor both over the whole image
+    and over the masked pixels alone (see ``content_mask``).
 
     Both codecs are monotonic in their quality knob, so a binary search finds
     the cheapest acceptable setting in ~6 encodes. A fixed ladder was tried
@@ -301,6 +365,8 @@ def _search_codec(
             failed = True
             return None
         score = psnr(im, dec)
+        if mask is not None:
+            score = min(score, psnr(im, dec, mask))
         if score > best_psnr:
             best_psnr = score
             fallback = (len(data), data)
@@ -358,6 +424,8 @@ def encode_candidates(im: Image.Image, profile: Profile) -> list[tuple[int, dict
     """Encode this image every way we can and return the eligible results.
 
     Returns ``[(size_in_bytes, spec)]``; the caller takes the smallest.
+    ``spec["data"]`` is always what ``spec["filter"]`` decodes; where it also
+    has ``"deflated"``, that is what gets written, and what the size counts.
     A candidate that cannot plausibly be the smallest may be left out.
 
     **Every candidate must clear the image's quality floor to be eligible.**
@@ -394,13 +462,26 @@ def encode_candidates(im: Image.Image, profile: Profile) -> list[tuple[int, dict
         ]
 
     cs = "/DeviceGray" if im.mode == "L" else "/DeviceRGB"
-    floor = psnr_floor(profile, im)
+    mask = content_mask(im)
+    floor = psnr_floor(profile, im, mask)
 
     out: list[tuple[int, dict]] = []
 
-    hit = _search_codec(lambda q: _encode_jpeg(im, q, profile), *_JPEG_RANGE, im, cs, floor)
+    hit = _search_codec(
+        lambda q: _encode_jpeg(im, q, profile), *_JPEG_RANGE, im, cs, floor, mask=mask
+    )
     if hit:
-        out.append((hit[0], {"data": hit[1], "filter": "/DCTDecode", "cs": cs, "bpc": 8}))
+        spec = {"data": hit[1], "filter": "/DCTDecode", "cs": cs, "bpc": 8}
+        # JPEG's entropy coding restarts every block, so runs of flat blocks
+        # become runs of near-identical bytes. Deflating them is lossless and
+        # standard (Pdftools does it to every JPEG): 7.0 KB -> 2.6 KB on a
+        # faint shape on white, 5-10% on a photograph. JPEG 2000's arithmetic
+        # coder leaves nothing for deflate to find.
+        size, packed = hit[0], flate(hit[1])
+        if len(packed) < size:
+            spec["deflated"] = packed
+            size = len(packed)
+        out.append((size, spec))
 
     hit = _search_codec(
         lambda db: _encode_jp2(im, db),
@@ -408,7 +489,8 @@ def encode_candidates(im: Image.Image, profile: Profile) -> list[tuple[int, dict
         im,
         cs,
         floor,
-        guess=math.ceil(floor) + _JP2_GUESS_OFFSET,
+        guess=min(_JP2_RANGE[1], math.ceil(floor + _dilution(mask)) + _JP2_GUESS_OFFSET),
+        mask=mask,
     )
     if hit:
         out.append((hit[0], {"data": hit[1], "filter": "/JPXDecode", "cs": cs, "bpc": 8}))
@@ -442,7 +524,13 @@ def set_image(xobj: pikepdf.Object, pdf: pikepdf.Pdf, spec: dict, size: tuple[in
         if key in xobj:
             del xobj[key]
 
-    xobj.write(spec["data"], filter=pikepdf.Name(spec["filter"]))
+    if "deflated" in spec:
+        xobj.write(
+            spec["deflated"],
+            filter=pikepdf.Array([pikepdf.Name("/FlateDecode"), pikepdf.Name(spec["filter"])]),
+        )
+    else:
+        xobj.write(spec["data"], filter=pikepdf.Name(spec["filter"]))
     xobj.Width = size[0]
     xobj.Height = size[1]
     xobj.BitsPerComponent = spec["bpc"]
