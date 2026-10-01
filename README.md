@@ -50,7 +50,7 @@ The complete command is:
 
 ```text
 pdf-diet [-p PROFILE] [-q 0..1] [-d DPI] [--no-crop] [--progressive] [--srgb]
-         [-v] input [output]
+         [-j N] [-v] input [output]
 pdf-diet --srgb-only [-v] input [output]
 ```
 
@@ -65,7 +65,8 @@ pdf-diet --srgb-only [-v] input [output]
 | `--progressive` | off | Write progressive JPEGs. This usually saves a few percent, but is not covered by PDF's baseline-JPEG wording. |
 | `--srgb` | off | Declare the document's colours as sRGB. See [Colour](#colour). |
 | `--srgb-only` | off | Declare the colours as sRGB and compress nothing. Cannot be combined with the compression options above. See [Colour](#colour). |
-| `-v`, `--verbose` | off | Report what happened to each image. |
+| `-j`, `--jobs` | usable CPUs | Number of processes encoding images. `1` runs everything in one process. See [Performance](#performance). |
+| `-v`, `--verbose` | off | Report what happened to each image, and how long each phase took. |
 | `--version` | — | Print the installed version. |
 
 The process exits with status 0 on success, 1 if optimization fails, and 2
@@ -87,6 +88,21 @@ that will only be viewed on screen, 96 DPI is often a useful starting point.
 If a PDF does not shrink as much as expected, try `--verbose`. The report
 shows the original and output dimensions, codec, and number of bytes saved
 for each image.
+
+### Performance
+
+Nearly all the time goes into encoding images, and each image is encoded
+independently, so `pdf-diet` spreads images across processes (threads would
+not help: Pillow holds the GIL while encoding). By default it starts one
+worker per CPU it may use, including any cgroup CPU quota, so on AWS Lambda
+the count follows the function's memory setting: 1 vCPU at 1,769 MB, up to 6
+at 10,240 MB. The pool uses only `Process` and `Pipe`, which work on Lambda,
+where `multiprocessing.Pool` fails for lack of `/dev/shm`. The output does not
+depend on the number of workers.
+
+`--verbose` ends with a table of where the time went. Image work is shown as
+CPU seconds summed over all workers, so with several workers it adds up to
+more than the wall-clock time of the images phase.
 
 ### Profiles
 
@@ -142,9 +158,11 @@ for image in result.images:
 ```
 
 The returned `Result` contains `before_bytes`, `after_bytes`, `ratio`,
-`saved_fraction`, `merged_objects`, and a list of `ImageResult` values. Each
-image result records its source and output dimensions, byte counts, chosen
-filter, and whether it was cropped.
+`saved_fraction`, `merged_objects`, `timings`, `image_timings`, `workers`,
+and a list of `ImageResult` values. Each image result records its source and
+output dimensions, byte counts, chosen filter, whether it was cropped, and
+the seconds spent on it. Pass `workers=` to `optimize_document` to choose the
+number of encoding processes.
 
 Profiles are dataclasses, so settings can be changed directly:
 

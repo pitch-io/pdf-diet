@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """The top-level optimization pass."""
 
+import hashlib
 import os
 import time
 from contextlib import contextmanager
@@ -11,7 +12,7 @@ import pikepdf
 from PIL import Image
 
 from .document import adjust_matrix, dedupe, prune, rewrite_placements
-from .geometry import plan_image, scan_placements
+from .geometry import Plan, plan_image, scan_placements
 from .images import (
     encode_candidates,
     flate,
@@ -20,6 +21,7 @@ from .images import (
     reduce_complexity,
     set_image,
 )
+from .parallel import Pool, available_cpus
 from .profiles import Profile, Web
 from .srgb import tag_srgb
 
@@ -37,8 +39,13 @@ class ImageResult:
     after_bytes: int
     filter: str
     cropped: bool
-    #: Wall-clock seconds spent on this image, decode to write-back.
+    #: Seconds spent on this image, decode to write-back, in whichever
+    #: process did the work.
     seconds: float = 0.0
+
+
+def _add(timings: dict[str, float], phase: str, seconds: float) -> None:
+    timings[phase] = timings.get(phase, 0.0) + seconds
 
 
 @dataclass
@@ -54,9 +61,15 @@ class Result:
     srgb_tagged: bool = False
     #: Why ``declare_srgb`` was requested but not applied, else None.
     srgb_skipped: str | None = None
-    #: Wall-clock seconds per phase, in the order the phases first ran.
-    #: Phases entered repeatedly (``decode``, ``encode``, ...) accumulate.
+    #: Wall-clock seconds per top-level phase, in the order they ran. These
+    #: add up to the run's total.
     timings: dict[str, float] = field(default_factory=dict)
+    #: Where the ``images`` phase went, summed over every image. With
+    #: several workers these overlap, so they add up to *more* than
+    #: ``timings["images"]``: read them as CPU cost, not wall-clock.
+    image_timings: dict[str, float] = field(default_factory=dict)
+    #: Processes that encoded images; 1 means inline.
+    workers: int = 1
 
     @contextmanager
     def timed(self, phase: str):
@@ -65,14 +78,17 @@ class Result:
         try:
             yield
         finally:
-            self.timings[phase] = self.timings.get(phase, 0.0) + time.perf_counter() - t0
+            _add(self.timings, phase, time.perf_counter() - t0)
 
     def timing_report(self) -> str:
         total = sum(self.timings.values())
-        lines = ["  timings:"]
+        lines = [f"  timings ({self.workers} worker{'s' if self.workers != 1 else ''}):"]
         for phase, secs in self.timings.items():
             share = 100 * secs / total if total else 0.0
             lines.append(f"    {phase:<10} {secs:>8.3f}s {share:>5.1f}%")
+            if phase == "images":
+                for sub, cpu in self.image_timings.items():
+                    lines.append(f"      {sub:<8} {cpu:>8.3f}s cpu")
         lines.append(f"    {'total':<10} {total:>8.3f}s")
         return "\n".join(lines)
 
@@ -94,8 +110,147 @@ class Result:
         )
 
 
+# --------------------------------------------------------------------------
+# Per-image work. Runs in a worker process, so it sees only Pillow images and
+# plain values: pikepdf objects belong to the parent's Pdf and cannot cross.
+# Everything that touches the document stays in Optimizer._apply.
+# --------------------------------------------------------------------------
+
+
+@dataclass
+class _Job:
+    im: Image.Image
+    smask: Image.Image | None
+    crop: tuple[int, int, int, int] | None
+    size: tuple[int, int]
+    source_px: tuple[int, int]
+    profile: Profile
+
+
+@dataclass
+class _Outcome:
+    #: Smallest eligible (size, spec), or None if there was no candidate.
+    best: tuple[int, dict] | None
+    #: ("drop",) | ("stencil", bytes) | ("replace", spec) | None
+    mask: tuple | None
+    timings: dict[str, float]
+
+
+def _mask_action(smask: Image.Image, profile: Profile) -> tuple | None:
+    """Drop a fully-opaque mask, stencil a binary one, recompress the rest."""
+    if smask.mode != "L":
+        smask = smask.convert("L")
+    lo, _hi = smask.getextrema()
+
+    if lo == 255:  # nothing is transparent
+        return ("drop",)
+
+    colors = smask.getcolors(4) or [(0, 1)]
+    if profile.reduce_color_complexity and all(v in (0, 255) for _, v in colors):
+        # Binary alpha: a 1-bit stencil is far cheaper than an 8-bit mask.
+        stencil = smask.point(lambda v: 0 if v else 255, mode="1")
+        return ("stencil", flate(stencil.tobytes()))
+
+    cands = encode_candidates(smask, profile)
+    if not cands:
+        return None
+    _size, spec = min(cands, key=lambda c: c[0])
+    spec["cs"] = "/DeviceGray"
+    return ("replace", spec)
+
+
+def _process(job: _Job) -> _Outcome:
+    """Crop, resize and encode one image and its soft mask."""
+    timings: dict[str, float] = {}
+    t0 = time.perf_counter()
+    im, smask = job.im, job.smask
+    if job.crop:
+        im = im.crop(job.crop)
+        if smask is not None:
+            # The soft mask may have its own resolution.
+            sx = smask.width / job.source_px[0]
+            sy = smask.height / job.source_px[1]
+            smask = smask.crop(
+                (
+                    int(job.crop[0] * sx),
+                    int(job.crop[1] * sy),
+                    max(1, int(job.crop[2] * sx)),
+                    max(1, int(job.crop[3] * sy)),
+                )
+            )
+    if (im.width, im.height) != job.size:
+        im = im.resize(job.size, Image.LANCZOS)
+    if smask is not None and (smask.width, smask.height) != job.size:
+        smask = smask.resize(job.size, Image.LANCZOS)
+    im = normalize_mode(im)
+    if job.profile.reduce_color_complexity:
+        im = reduce_complexity(im)
+    t1 = time.perf_counter()
+    _add(timings, "prepare", t1 - t0)
+
+    mask = None
+    if smask is not None:
+        mask = _mask_action(smask, job.profile)
+        t2 = time.perf_counter()
+        _add(timings, "mask", t2 - t1)
+        t1 = t2
+
+    cands = encode_candidates(im, job.profile)
+    _add(timings, "encode", time.perf_counter() - t1)
+    best = min(cands, key=lambda c: c[0]) if cands else None
+    return _Outcome(best=best, mask=mask, timings=timings)
+
+
+@dataclass
+class _Pending:
+    """Parent-side state for an image while its job is out."""
+
+    objgen: tuple
+    before: int
+    plan: Plan
+    source_px: tuple[int, int]
+    decode_seconds: float
+    key: tuple
+
+
+#: Dictionary entries that change what an image stream decodes to.
+_DECODE_KEYS = (
+    "/Width",
+    "/Height",
+    "/Filter",
+    "/DecodeParms",
+    "/ColorSpace",
+    "/BitsPerComponent",
+    "/Decode",
+    "/ImageMask",
+    "/Mask",
+)
+
+
+def _content_key(stream) -> tuple:
+    """Identifies a stream by what it decodes to, not by which object it is."""
+    return (
+        hashlib.blake2b(stream.read_raw_bytes(), digest_size=16).digest(),
+        tuple(repr(stream.get(k)) for k in _DECODE_KEYS),
+    )
+
+
+@dataclass
+class _Seen:
+    """Images already sent out, by content key."""
+
+    #: Outcomes that are back.
+    done: dict[tuple, _Outcome] = field(default_factory=dict)
+    #: Keys still out, with the copies waiting on each.
+    waiting: dict[tuple, list[_Pending]] = field(default_factory=dict)
+
+
 class Optimizer:
     """Compresses PDFs. Mirrors ``pdftools_sdk.optimization.optimizer.Optimizer``.
+
+    ``workers`` is how many processes encode images: ``None`` (the default)
+    means one per CPU this process may use, cgroup quota included, which is
+    what matters on AWS Lambda; ``1`` encodes inline with no subprocesses.
 
     Example:
         >>> from pdfdiet import Optimizer, MinimalFileSize
@@ -104,43 +259,13 @@ class Optimizer:
         True
     """
 
-    def __init__(self, verbose: bool = False):
+    def __init__(self, verbose: bool = False, workers: int | None = None):
         self.verbose = verbose
+        self.workers = workers
 
     def _log(self, *a) -> None:
         if self.verbose:
             print(*a)
-
-    def _handle_soft_mask(self, pdf, xobj, smask_obj, smask_im, plan, profile) -> None:
-        """Drop a fully-opaque mask, stencil a binary one, recompress the rest."""
-        if smask_im.mode != "L":
-            smask_im = smask_im.convert("L")
-        lo, _hi = smask_im.getextrema()
-
-        if lo == 255:  # nothing is transparent
-            del xobj["/SMask"]
-            return
-
-        colors = smask_im.getcolors(4) or [(0, 1)]
-        if profile.reduce_color_complexity and all(v in (0, 255) for _, v in colors):
-            # Binary alpha: a 1-bit stencil is far cheaper than an 8-bit mask.
-            stencil = smask_im.point(lambda v: 0 if v else 255, mode="1")
-            ms = pdf.make_stream(flate(stencil.tobytes()))
-            ms.Filter = pikepdf.Name("/FlateDecode")
-            ms.Type = pikepdf.Name("/XObject")
-            ms.Subtype = pikepdf.Name("/Image")
-            ms.Width, ms.Height = plan.size
-            ms.ImageMask = True
-            ms.BitsPerComponent = 1
-            del xobj["/SMask"]
-            xobj.Mask = ms
-            return
-
-        cands = encode_candidates(smask_im, profile)
-        if cands:
-            _size, spec = min(cands, key=lambda c: c[0])
-            spec["cs"] = "/DeviceGray"
-            set_image(smask_obj, pdf, spec, plan.size)
 
     def _declare_srgb(self, pdf, result: Result) -> None:
         """Tag ``pdf`` as sRGB, recording a failure on ``result`` rather than
@@ -185,16 +310,35 @@ class Optimizer:
             before_bytes=os.path.getsize(in_path),
             after_bytes=0,
         )
-        with result.timed("open"):
-            pdf = pikepdf.open(in_path)
+        n = self.workers if self.workers is not None else available_cpus()
+        # Before opening the PDF: workers are forked and should not inherit it.
+        with result.timed("spawn"):
+            pool = Pool(n)
+        with pool:
+            result.workers = pool.workers
+            with result.timed("open"):
+                pdf = pikepdf.open(in_path)
+            try:
+                return self._optimize(pdf, pool, out_path, profile, result)
+            finally:
+                pdf.close()
 
-        with result.timed("scan"):
-            placements = scan_placements(pdf)
-        adjust: dict[tuple, tuple] = {}
-        self._log(f"  {len(placements)} image XObjects placed")
+    def _jobs(self, pdf, placements, profile, result: Result, seen: _Seen, adjust):
+        """Decode each image worth touching; yields ``(_Pending, _Job)``.
 
-        for objgen, ps in placements.items():
-            t_image = time.perf_counter()
+        A generator so the pool can pull lazily: only the images currently
+        being worked on are held decoded in memory.
+
+        An image identical to one already sent out -- same samples, mask,
+        crop and size -- is not sent again. Decks repeat images as separate
+        XObjects that ``dedupe`` only merges at the end; across the benchmark
+        corpus that was 19% of all pixels encoded. It gets the first copy's
+        outcome instead, now if that is back, or when it arrives.
+        """
+        # Largest first: encode time grows with pixel count, and one big image
+        # handed out last leaves every other worker idle while it finishes.
+        by_size = sorted(placements.items(), key=lambda kv: -kv[1][0].px[0] * kv[1][0].px[1])
+        for objgen, ps in by_size:
             try:
                 xobj = pdf.get_object(objgen)
                 before = len(xobj.read_raw_bytes())
@@ -205,82 +349,139 @@ class Optimizer:
             if plan is None:
                 continue
 
-            with result.timed("decode"):
-                im = load_pil(xobj)
+            try:
                 smask_obj = xobj.get("/SMask")
-                smask_im = load_pil(smask_obj) if smask_obj is not None else None
+                key = (
+                    _content_key(xobj),
+                    _content_key(smask_obj) if smask_obj is not None else None,
+                    plan.crop,
+                    plan.size,
+                )
+            except Exception:
+                key = (objgen,)  # unhashable content: never shared
+            pending = _Pending(objgen, before, plan, ps[0].px, 0.0, key)
+            if key in seen.done:
+                self._apply(pdf, pending, seen.done[key], result, adjust, reused=True)
+                continue
+            if key in seen.waiting:
+                seen.waiting[key].append(pending)
+                continue
+            seen.waiting[key] = []
+
+            t0 = time.perf_counter()
+            im = load_pil(xobj)
+            smask_obj = xobj.get("/SMask")
+            smask_im = load_pil(smask_obj) if smask_obj is not None else None
+            pending.decode_seconds = time.perf_counter() - t0
+            _add(result.image_timings, "decode", pending.decode_seconds)
             if im is None:
+                # Copies of an undecodable image are left alone with it.
+                del seen.waiting[key]
                 continue
 
-            with result.timed("prepare"):
-                if plan.crop:
-                    im = im.crop(plan.crop)
-                    if smask_im is not None:
-                        # The soft mask may have its own resolution.
-                        sx = smask_im.width / ps[0].px[0]
-                        sy = smask_im.height / ps[0].px[1]
-                        smask_im = smask_im.crop(
-                            (
-                                int(plan.crop[0] * sx),
-                                int(plan.crop[1] * sy),
-                                max(1, int(plan.crop[2] * sx)),
-                                max(1, int(plan.crop[3] * sy)),
-                            )
-                        )
-                if (im.width, im.height) != plan.size:
-                    im = im.resize(plan.size, Image.LANCZOS)
-                if smask_im is not None and (smask_im.width, smask_im.height) != plan.size:
-                    smask_im = smask_im.resize(plan.size, Image.LANCZOS)
-                im = normalize_mode(im)
-                if profile.reduce_color_complexity:
-                    im = reduce_complexity(im)
+            yield pending, _Job(im, smask_im, plan.crop, plan.size, ps[0].px, profile)
 
-            if smask_im is not None:
-                with result.timed("mask"):
-                    self._handle_soft_mask(pdf, xobj, smask_obj, smask_im, plan, profile)
+    def _apply(
+        self,
+        pdf,
+        pending: _Pending,
+        outcome: _Outcome,
+        result: Result,
+        adjust,
+        reused: bool = False,
+    ) -> None:
+        """Write one image's outcome back into the document.
 
-            with result.timed("encode"):
-                cands = encode_candidates(im, profile)
-            if not cands:
-                self._log(
-                    f"  {ps[0].px[0]}x{ps[0].px[1]} kept, no candidate "
-                    f"{time.perf_counter() - t_image:.2f}s"
-                )
-                continue
-            size, spec = min(cands, key=lambda c: c[0])
+        ``reused`` marks a copy given another image's outcome: its encode
+        time was not spent again, so it is neither counted nor reported.
+        """
+        t0 = time.perf_counter()
+        spent = 0.0 if reused else pending.decode_seconds + sum(outcome.timings.values())
+        if not reused:
+            for phase, secs in outcome.timings.items():
+                _add(result.image_timings, phase, secs)
+        xobj = pdf.get_object(pending.objgen)
+        plan = pending.plan
+        w, h = pending.source_px
 
-            if size >= before:
-                # Recompression would not help. Logged anyway: the encode
-                # time was spent all the same.
-                self._log(
-                    f"  {ps[0].px[0]}x{ps[0].px[1]} kept, best "
-                    f"{spec['filter']:<12} {before / 1024:>9.1f}K <= {size / 1024:>8.1f}K "
-                    f"{time.perf_counter() - t_image:>7.2f}s"
-                )
-                continue
+        if outcome.mask is not None:
+            kind = outcome.mask[0]
+            if kind == "drop":
+                del xobj["/SMask"]
+            elif kind == "stencil":
+                ms = pdf.make_stream(outcome.mask[1])
+                ms.Filter = pikepdf.Name("/FlateDecode")
+                ms.Type = pikepdf.Name("/XObject")
+                ms.Subtype = pikepdf.Name("/Image")
+                ms.Width, ms.Height = plan.size
+                ms.ImageMask = True
+                ms.BitsPerComponent = 1
+                del xobj["/SMask"]
+                xobj.Mask = ms
+            elif kind == "replace":
+                set_image(xobj.SMask, pdf, outcome.mask[1], plan.size)
 
-            with result.timed("write"):
-                set_image(xobj, pdf, spec, plan.size)
-            seconds = time.perf_counter() - t_image
-            if plan.uv:
-                adjust[objgen] = adjust_matrix(plan.uv)
-            result.images.append(
-                ImageResult(
-                    objgen=objgen,
-                    source_px=ps[0].px,
-                    result_px=plan.size,
-                    before_bytes=before,
-                    after_bytes=size,
-                    filter=spec["filter"],
-                    cropped=plan.crop is not None,
-                    seconds=seconds,
-                )
-            )
+        def seconds() -> float:
+            return spent + time.perf_counter() - t0
+
+        tag = " (copy)" if reused else ""
+
+        if outcome.best is None:
+            self._log(f"  {w}x{h} kept, no candidate {seconds():.2f}s{tag}")
+            return
+        size, spec = outcome.best
+        before = pending.before
+
+        if size >= before:
+            # Recompression would not help. Logged anyway: the encode time
+            # was spent all the same.
             self._log(
-                f"  {ps[0].px[0]}x{ps[0].px[1]} -> "
-                f"{plan.size[0]}x{plan.size[1]} {spec['filter']:<12} "
-                f"{before / 1024:>9.1f}K -> {size / 1024:>8.1f}K {seconds:>7.2f}s"
+                f"  {w}x{h} kept, best "
+                f"{spec['filter']:<12} {before / 1024:>9.1f}K <= {size / 1024:>8.1f}K "
+                f"{seconds():>7.2f}s{tag}"
             )
+            return
+
+        set_image(xobj, pdf, spec, plan.size)
+        _add(result.image_timings, "write", time.perf_counter() - t0)
+        if plan.uv:
+            adjust[pending.objgen] = adjust_matrix(plan.uv)
+        result.images.append(
+            ImageResult(
+                objgen=pending.objgen,
+                source_px=pending.source_px,
+                result_px=plan.size,
+                before_bytes=before,
+                after_bytes=size,
+                filter=spec["filter"],
+                cropped=plan.crop is not None,
+                seconds=seconds(),
+            )
+        )
+        self._log(
+            f"  {w}x{h} -> "
+            f"{plan.size[0]}x{plan.size[1]} {spec['filter']:<12} "
+            f"{before / 1024:>9.1f}K -> {size / 1024:>8.1f}K "
+            f"{result.images[-1].seconds:>7.2f}s{tag}"
+        )
+
+    def _optimize(self, pdf, pool: Pool, out_path, profile: Profile, result: Result) -> Result:
+        with result.timed("scan"):
+            placements = scan_placements(pdf)
+        adjust: dict[tuple, tuple] = {}
+        self._log(f"  {len(placements)} image XObjects placed")
+
+        order = {objgen: i for i, objgen in enumerate(placements)}
+        seen = _Seen()
+        with result.timed("images"):
+            jobs = self._jobs(pdf, placements, profile, result, seen, adjust)
+            for pending, outcome in pool.map_unordered(_process, jobs):
+                self._apply(pdf, pending, outcome, result, adjust)
+                for copy in seen.waiting.pop(pending.key, []):
+                    self._apply(pdf, copy, outcome, result, adjust, reused=True)
+                seen.done[pending.key] = outcome
+        # Results arrive in completion order; report them in document order.
+        result.images.sort(key=lambda r: order[r.objgen])
 
         with result.timed("rewrite"):
             rewrite_placements(pdf, adjust)
@@ -306,17 +507,20 @@ class Optimizer:
                 recompress_flate=True,
                 stream_decode_level=pikepdf.StreamDecodeLevel.generalized,
             )
-        pdf.close()
         result.after_bytes = os.path.getsize(out_path)
         self._log(result.timing_report())
         return result
 
 
 def optimize_document(
-    in_path, out_path, profile: Profile | None = None, verbose: bool = False
+    in_path,
+    out_path,
+    profile: Profile | None = None,
+    verbose: bool = False,
+    workers: int | None = None,
 ) -> Result:
     """Convenience wrapper around :class:`Optimizer`."""
-    return Optimizer(verbose=verbose).optimize_document(in_path, out_path, profile)
+    return Optimizer(verbose=verbose, workers=workers).optimize_document(in_path, out_path, profile)
 
 
 def declare_srgb(in_path, out_path, verbose: bool = False) -> Result:

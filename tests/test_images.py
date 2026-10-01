@@ -10,8 +10,12 @@ import pytest
 from PIL import Image
 
 from conftest import flat_image, gradient_image, noisy_image
+from pdfdiet import images
 from pdfdiet.images import (
+    _JP2_RANGE,
     PSNR_FLOOR_CEILING,
+    _encode_jp2,
+    _search_codec,
     detail,
     encode_candidates,
     load_pil,
@@ -180,9 +184,23 @@ class TestEncodeCandidates:
                 assert len(dec.getbands()) == want
                 assert dec.size == im.size
 
-    def test_lossless_is_always_offered(self) -> None:
-        cands = encode_candidates(gradient_image(64, 64), Web())
-        assert any(s["filter"] == "/FlateDecode" for _n, s in cands)
+    def test_lossless_is_offered_where_it_wins(self) -> None:
+        cands = encode_candidates(flat_image(), Web())
+        assert min(cands, key=lambda c: c[0])[1]["filter"] == "/FlateDecode"
+
+    @pytest.mark.parametrize(
+        "im",
+        [gradient_image(64, 64), gradient_image(), noisy_image(), flat_image()],
+        ids=["tiny-gradient", "gradient", "noisy", "flat"],
+    )
+    def test_skipping_lossless_never_changes_the_choice(self, im, monkeypatch) -> None:
+        def best():
+            size, spec = min(encode_candidates(im, Web()), key=lambda c: c[0])
+            return size, spec["filter"]
+
+        guarded = best()
+        monkeypatch.setattr(images, "_FLATE_LEVEL_GAIN", float("inf"))
+        assert guarded == best()
 
     def test_bitonal_stays_lossless(self) -> None:
         im = Image.new("1", (64, 64))
@@ -194,6 +212,39 @@ class TestEncodeCandidates:
         cands = encode_candidates(flat_image(256, 256), Web())
         best = min(c[0] for c in cands)
         assert best < 256 * 256 * 3 / 50
+
+
+class TestSearchCodec:
+    """The galloping search is an optimisation: it must never change the answer."""
+
+    @pytest.mark.parametrize("im", [gradient_image(200, 120), noisy_image(160, 120)])
+    @pytest.mark.parametrize("floor", [28.0, 33.5, 41.0, 47.2, 70.0])
+    @pytest.mark.parametrize("offset", [-9, -1, 0, 1, 12])
+    def test_guess_gives_the_binary_search_answer(self, im, floor, offset) -> None:
+        def run(guess):
+            calls = []
+
+            def enc(db):
+                calls.append(db)
+                return _encode_jp2(im, db)
+
+            return _search_codec(enc, *_JP2_RANGE, im, "/DeviceRGB", floor, guess), calls
+
+        plain, _ = run(None)
+        guessed, calls = run(int(floor) + offset)
+        assert guessed == plain
+        assert len(calls) == len(set(calls)), "no setting is encoded twice"
+
+    def test_a_good_guess_is_cheap(self) -> None:
+        im = noisy_image(160, 120)
+        calls = []
+
+        def enc(db):
+            calls.append(db)
+            return _encode_jp2(im, db)
+
+        _search_codec(enc, *_JP2_RANGE, im, "/DeviceRGB", 40.0, guess=40)
+        assert len(calls) <= 3
 
 
 class TestLoadPil:
