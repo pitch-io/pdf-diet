@@ -17,7 +17,7 @@ from .optimizer import ImageResult, Optimizer, Result, declare_srgb, optimize_do
 from .profiles import PROFILES, MinimalFileSize, Profile, RemovalOptions, Web
 from .srgb import ForeignOutputIntent, tag_srgb
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 __all__ = [
     "PROFILES",
