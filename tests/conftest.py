@@ -15,7 +15,7 @@ from pathlib import Path
 import pikepdf
 import pytest
 from pikepdf import Dictionary, Name
-from PIL import Image
+from PIL import Image, ImageDraw
 
 PAGE_W, PAGE_H = 720.0, 405.0  # points; 10 x 5.625 in
 
@@ -63,6 +63,19 @@ def noisy_image(w: int = 400, h: int = 300, seed: int = 7) -> Image.Image:
 
 def flat_image(w: int = 200, h: int = 200, color=(10, 200, 90)) -> Image.Image:
     return Image.new("RGB", (w, h), color)
+
+
+def faint_circle_image(w: int = 470, h: int = 450, color=(240, 247, 240)) -> Image.Image:
+    """A pale disc on white, antialiased: a slide's soft background shape.
+
+    About 8 grey levels off its background, and mostly exactly flat, so
+    whole-image PSNR barely sees damage at its edge.
+    """
+    big = Image.new("RGB", (w * 4, h * 4), (255, 255, 255))
+    r = min(w, h) * 2 * 0.8
+    cx, cy = w * 2, h * 2
+    ImageDraw.Draw(big).ellipse((cx - r, cy - r, cx + r, cy + r), fill=color)
+    return big.resize((w, h), Image.LANCZOS)
 
 
 # --------------------------------------------------------------------------

@@ -110,9 +110,10 @@ These are load-bearing. Tests enforce all of them.
    3 for `/DeviceRGB`, 1 for `/DeviceGray`. `_shape_ok` re-decodes every
    candidate to check.
 2. **Every lossy candidate clears `psnr_floor()`, or is the best that codec
-   can manage.** Never select on size alone. The second case exists because
-   the floor is capped (see `PSNR_FLOOR_CEILING`) and some images cannot
-   reach it at any setting; returning nothing there left them untouched.
+   can manage** — over the whole image *and* over `content_mask()`. Never
+   select on size alone. The second case exists because the floor is capped
+   (see `PSNR_FLOOR_CEILING`) and some images cannot reach it at any
+   setting; returning nothing there left them untouched.
 3. **Cropping an image requires rewriting its placement matrix.** Crop and
    `adjust_matrix` must be applied together or the page shifts.
 4. **Downsampling is decided per axis.** A stretched image has different
@@ -134,7 +135,7 @@ These are load-bearing. Tests enforce all of them.
 
 ## Hazards
 
-Three bugs reached rendered pages. Each one passed a naive check first.
+Four bugs reached rendered pages. Each one passed a naive check first.
 
 ### `as_pil_image()` composites masks into alpha
 
@@ -175,6 +176,22 @@ optimizer's output or were skipped entirely. Swept over the corpus at
 gradient-heavy deck went from +49% to −31% against the reference with no
 banding on visual inspection, and photo-heavy decks are entirely insensitive
 to the cap because their floors sit far below it.
+
+### Flat backgrounds hide damage from PSNR
+
+Whole-image PSNR averages error over every pixel, and an exactly flat region
+comes back from any codec almost perfect. On a pale circle on white, 8 grey
+levels off its background, JPEG 2000 produced 1.1 KB that scored 48.4 dB
+against a 48 dB floor while edge pixels were off by up to 12. The circle
+rendered visibly blurred and blotchy next to the reference tool's.
+
+`content_mask()` marks pixels within 8 px of any change in the source;
+candidates must clear the floor over it too (40 dB for that encoding), and
+`detail()` is measured over the same pixels so a photograph on white is not
+mistaken for a flat graphic. The mask comes from the *source*, never the
+error: deciding by where the output is wrong lets a codec that smears error
+everywhere dilute itself again. Worst-tile PSNR was tried and does not
+separate good from bad — it ignores how much contrast the tile had.
 
 ### Pillow's JPEG optimiser silently caps quality
 
@@ -246,6 +263,8 @@ the whole loop, so one awkward value cannot abandon a container half-done.
   `/SMask /G`) are skipped **on purpose**: they produce opacity, not colour.
   A real deck showing "2/4 forms tagged" is this, not a bug —
   `test_soft_mask_groups_are_left_alone` pins it.
+- Pixels under a fully transparent `/SMask` still count towards an image's
+  quality score. Harmless, but slightly stricter than it needs to be.
 - JPEG 2000 quality comes from OpenJPEG, which is weaker than the
   Kakadu-class encoder the commercial tool uses. **mozjpeg** (BSD-3-Clause)
   is the obvious next lever and is not wired up.
